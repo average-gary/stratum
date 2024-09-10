@@ -3,6 +3,8 @@ pub mod mining_pool;
 pub mod status;
 pub mod template_receiver;
 
+use std::{collections::HashMap, sync::Arc};
+
 use async_channel::{bounded, unbounded};
 
 use error::PoolError;
@@ -11,18 +13,24 @@ use template_receiver::TemplateRx;
 use tracing::{error, info, warn};
 
 use tokio::select;
+use cdk::{cdk_database::mint_memory::MintMemoryDatabase, nuts::{CurrencyUnit, MintInfo, Nuts}, Mint};
+use bip39::Mnemonic;
+
 
 #[derive(Debug, Clone)]
 pub struct PoolSv2 {
     config: Configuration,
+    mint: Option<Arc<Mint>>,
 }
 
 impl PoolSv2 {
     pub fn new(config: Configuration) -> PoolSv2 {
-        PoolSv2 { config }
+        PoolSv2 {
+            config,
+            mint: None,
+        }
     }
-
-    pub async fn start(&self) -> Result<(), PoolError> {
+    pub async fn start(mut self) {
         let config = self.config.clone();
         let (status_tx, status_rx) = unbounded();
         let (s_new_t, r_new_t) = bounded(10);
@@ -42,7 +50,16 @@ impl PoolSv2 {
             coinbase_output_len,
             tp_authority_public_key,
         )
-        .await?;
+        .await;
+
+        if let Err(e) = template_rx_res {
+            error!("Could not connect to Template Provider: {}", e);
+            return;
+        }
+    
+        let mint = Arc::new(self.create_mint().await);
+        self.mint = Some(mint.clone());
+
         let pool = Pool::start(
             config.clone(),
             r_new_t,
@@ -100,4 +117,34 @@ impl PoolSv2 {
             }
         }
     }
+
+    async fn create_mint(&self) -> Mint {
+        let nuts = Nuts::new()
+            .nut07(true)
+            .nut08(true)
+            .nut09(true)
+            .nut10(true)
+            .nut11(true)
+            .nut12(true)
+            .nut14(true);
+
+        let mint_info = MintInfo::new().nuts(nuts);
+
+        let mnemonic = Mnemonic::generate(12).unwrap();
+
+        let mut supported_units = HashMap::new();
+        supported_units.insert(CurrencyUnit::Hash, (0, 64));
+
+        let mint = Mint::new(
+            "http://localhost:8000",
+            &mnemonic.to_seed_normalized(""),
+            mint_info,
+            Arc::new(MintMemoryDatabase::default()),
+            supported_units,
+        )
+        .await.unwrap();
+
+        mint
+    }
+
 }
