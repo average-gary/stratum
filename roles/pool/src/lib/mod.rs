@@ -33,7 +33,8 @@ impl PoolSv2 {
             keyset_id: None,
         }
     }
-    pub async fn start(mut self) {
+
+    pub async fn start(&mut self) -> Result<(), PoolError> {
         let config = self.config.clone();
         let (status_tx, status_rx) = unbounded();
         let (s_new_t, r_new_t) = bounded(10);
@@ -63,7 +64,7 @@ impl PoolSv2 {
 
         if let Err(e) = template_rx_res {
             error!("Could not connect to Template Provider: {}", e);
-            return;
+            return Err(e);
         }
     
         let mint = Arc::new(Mutex::new(self.create_mint().await));
