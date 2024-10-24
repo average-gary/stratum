@@ -1,6 +1,14 @@
 use async_channel::{Receiver, Sender};
-use bitcoin::{bip32::{ChildNumber, DerivationPath}, key::Secp256k1};
-use cdk::{amount::{Amount, SplitTarget}, nuts::{CurrencyUnit, MintKeySet}, wallet::Wallet};
+use bitcoin::{
+    bip32::{ChildNumber, DerivationPath},
+    key::Secp256k1,
+    PublicKey,
+};
+use cdk::{
+    amount::{Amount, SplitTarget},
+    nuts::{CurrencyUnit, MintKeySet, PreMintSecrets},
+    wallet::Wallet,
+};
 use rand::Rng;
 use roles_logic_sv2::{
     channel_logic::channel_factory::{ExtendedChannelKind, ProxyExtendedChannelFactory, Share},
@@ -84,20 +92,10 @@ impl Bridge {
         target: Arc<Mutex<Vec<u8>>>,
         up_id: u32,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+        wallet: Arc<Mutex<Wallet>>,
+        mint_pubkey: Option<PublicKey>,
     ) -> Arc<Mutex<Self>> {
         use std::sync::Arc;
-
-        use cdk::cdk_database::WalletMemoryDatabase;
-        use cdk::nuts::CurrencyUnit;
-        use cdk::wallet::Wallet;
-        use rand::Rng;
-    
-        let seed = rand::thread_rng().gen::<[u8; 32]>();
-        let mint_url = "https://testnut.cashu.space";
-        let unit = CurrencyUnit::Hash;
-    
-        let localstore = WalletMemoryDatabase::default();
-        let wallet = Arc::new(RwLock::new(Wallet::new(mint_url, unit, Arc::new(localstore), &seed, None)));
 
         let ids = Arc::new(Mutex::new(GroupId::new()));
         let share_per_min = 1.0;
@@ -121,6 +119,7 @@ impl Bridge {
                 None,
                 String::from(""),
                 up_id,
+                Some(wallet),
             ),
             future_jobs: vec![],
             last_p_hash: None,
@@ -255,8 +254,8 @@ impl Bridge {
             .map_err(|_| PoisonLock)?;
 
         let sv2_submit = self_
-            .safe_lock(|s| {
-                s.translate_submit(share.channel_id, share.share, share.version_rolling_mask)
+            .safe_lock(async |s| {
+                s.translate_submit(share.channel_id, share.share, share.version_rolling_mask).await?
             })
             .map_err(|_| PoisonLock)??;
         let res = self_
@@ -304,39 +303,29 @@ impl Bridge {
         Ok(())
     }
 
-    fn create_blinded_secret(&self) -> Result<cdk::nuts::PreMintSecrets, cdk::wallet::error::Error> {
+    async fn create_blinded_secret(
+        &self,
+    ) -> Result<cdk::nuts::PreMintSecrets, cdk::wallet::error::Error> {
         //============ fake the mint stuff for now ======================
         // stolen from cdk derivation_path_from_unit
         let derivation_path = DerivationPath::from(vec![
             ChildNumber::from_hardened_idx(0).expect("0 is a valid index"),
-            ChildNumber::from_hardened_idx(CurrencyUnit::Hash.derivation_index()).expect("0 is a valid index"),
+            ChildNumber::from_hardened_idx(CurrencyUnit::Hash.derivation_index())
+                .expect("0 is a valid index"),
             ChildNumber::from_hardened_idx(0).expect("0 is a valid index"),
         ]);
-    
-        // TODO retrieve keyset from mint
-        let seed = "test_seed".as_bytes();
-        let keyset = MintKeySet::generate_from_seed(
-            &Secp256k1::new(),
-            seed,
-            2,
-            CurrencyUnit::Hash,
-            derivation_path,
-        );
-    
-        let keyset_id = keyset.id;
         // use a random token count to avoid maintaining unnecessary state
         let mut ehash_token_count: u32 = rand::thread_rng().gen_range(0..=2_147_483_647);
         //============ end fake mint stuff ==============================
 
         let premint_secret: Result<cdk::nuts::PreMintSecrets, cdk::wallet::error::Error> = {
             let wallet = self.wallet.write().unwrap();
-            wallet.generate_premint_secrets(
-                keyset_id,
-                Amount::from(1),
-                &SplitTarget::None,
-                None,
-                ehash_token_count,
-            )
+            let counter = wallet.get_key_counter().await?;
+            let wallet_xpriv = 
+            let derived_xpriv = 
+            // PreMintSecrets::from_xpriv()
+            // Secret::from_xpriv()
+            //
         };
 
         premint_secret
@@ -344,7 +333,7 @@ impl Bridge {
 
     /// Translates a SV1 `mining.submit` message to a SV2 `SubmitSharesExtended` message.
     #[allow(clippy::result_large_err)]
-    fn translate_submit(
+    async fn translate_submit(
         &self,
         channel_id: u32,
         sv1_submit: Submit,
@@ -362,6 +351,15 @@ impl Bridge {
         };
         let mining_device_extranonce: Vec<u8> = sv1_submit.extra_nonce2.into();
         let extranonce2 = mining_device_extranonce;
+
+        // CREATE BLINDED MESSAGE
+        let blinded_message = self
+            .create_blinded_secret()
+            .await
+            .unwrap()
+            .blinded_messages()
+            .first();
+
         Ok(SubmitSharesExtended {
             channel_id,
             // I put 0 below cause sequence_number is not what should be TODO
@@ -371,6 +369,7 @@ impl Bridge {
             ntime: sv1_submit.time.0,
             version,
             extranonce: extranonce2.try_into()?,
+            blinded_message,
         })
     }
 

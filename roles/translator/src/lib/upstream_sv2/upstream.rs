@@ -11,6 +11,7 @@ use crate::{
 use async_channel::{Receiver, Sender};
 use async_std::net::TcpStream;
 use binary_sv2::{u256_from_int, PubKey};
+use cdk::wallet::Wallet;
 use codec_sv2::{HandshakeRole, Initiator};
 use error_handling::handle_result;
 use key_utils::Secp256k1PublicKey;
@@ -100,8 +101,8 @@ pub struct Upstream {
     // than the configured percentage
     pub(super) difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
-    mint_pubkey: Option<PubKey>,
-    wallet_xpriv: ExtendedPrivKey,
+    mint_pubkey: Option<Arc<Mutex<PubKey>>>,
+    wallet: Option<Arc<Mutex<Wallet>>>,
 }
 
 impl PartialEq for Upstream {
@@ -488,12 +489,14 @@ impl Upstream {
     pub fn handle_submit(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
         let task_collector = self_.safe_lock(|s| s.task_collector.clone()).unwrap();
         let clone = self_.clone();
-        let (tx_frame, receiver, tx_status) = clone
+        let (tx_frame, receiver, tx_status, mint_pubkey, wallet) = clone
             .safe_lock(|s| {
                 (
                     s.connection.sender.clone(),
                     s.rx_sv2_submit_shares_ext.clone(),
                     s.tx_status.clone(),
+                    s.mint_pubkey.clone(),
+                    s.wallet.clone()
                 )
             })
             .map_err(|_| PoisonLock)?;
@@ -515,6 +518,21 @@ impl Upstream {
                     handle_result!(tx_status, handle_result!(tx_status, channel_id));
                 let job_id = Self::get_job_id(&self_);
                 sv2_submit.job_id = handle_result!(tx_status, handle_result!(tx_status, job_id));
+
+                // mints pubkey from the success message
+                // wallets
+                // create premint secrets from pubkey
+                match wallet {
+                    Some(x) => {
+                        x.safe_lock(|x_w| {
+                            let count = x_w.count
+                            let premint_secret = x_w.generate_premint_secret(count).unwrap();
+                        })
+                    },
+                    None => todo!(),
+                }
+                // store in wallet?
+                sv2_submit.blinded_message = todo!();
 
                 let message = Message::Mining(
                     roles_logic_sv2::parsers::Mining::SubmitSharesExtended(sv2_submit),
@@ -693,6 +711,9 @@ impl ParseUpstreamMiningMessages<Downstream, NullDownstreamMiningSelector, NoRou
         &mut self,
         m: roles_logic_sv2::mining_sv2::OpenExtendedMiningChannelSuccess,
     ) -> Result<SendTo<Downstream>, RolesLogicError> {
+        self.mint_pubkey = Some(Arc::new(Mutex::new(m.pubkey)));
+        // Give the pubkey we receive in the OpenExtendedMiningChannelSuccess to the Upstream
+        self.mint_pubkey = Some(m.pubkey);
         let tproxy_e1_len = super::super::utils::proxy_extranonce1_len(
             m.extranonce_size as usize,
             self.min_extranonce_size.into(),

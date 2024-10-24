@@ -10,7 +10,7 @@ use super::super::{
     PoolChangerTrigger,
 };
 use async_channel::{Receiver, Sender};
-use binary_sv2::{Seq0255, U256};
+use binary_sv2::{PubKey, Seq0255, U256};
 use codec_sv2::{HandshakeRole, Initiator};
 use error_handling::handle_result;
 use key_utils::Secp256k1PublicKey;
@@ -126,7 +126,7 @@ pub struct Upstream {
     channel_factory: Option<PoolChannelFactory>,
     template_to_job_id: TemplateToJobId,
     req_ids: Id,
-    keyset_id: u64,
+    pubkey: Option<PubKey>,
 }
 
 impl Upstream {
@@ -156,6 +156,7 @@ impl Upstream {
         tx_status: status::Sender,
         task_collector: Arc<Mutex<Vec<AbortHandle>>>,
         pool_chaneger_trigger: Arc<Mutex<PoolChangerTrigger>>,
+        pubkey: Option<PubKey>
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
         // Connect to the SV2 Upstream role retry connection every 5 seconds.
         let socket = loop {
@@ -199,7 +200,7 @@ impl Upstream {
             channel_factory: None,
             template_to_job_id: TemplateToJobId::new(),
             req_ids: Id::new(),
-            keyset_id: 0,
+            pubkey,
         })))
     }
 
@@ -595,6 +596,7 @@ impl ParseUpstreamMiningMessages<Downstream, NullDownstreamMiningSelector, NoRou
             channel_kind,
             vec![],
             pool_signature,
+            self.pubkey
         );
         let extranonce: Extranonce = m
             .extranonce_prefix

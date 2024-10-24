@@ -666,7 +666,6 @@ dependencies = [
 [[package]]
 name = "cdk"
 version = "0.3.0"
-source = "git+https://github.com/vnprc/cdk?branch=get_blinded_secrets#df467876da56d7aab95355721c63da4c40822473"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2475,6 +2474,7 @@ name = "roles_logic_sv2"
 version = "1.2.1"
 dependencies = [
  "binary_sv2",
+ "cdk",
  "chacha20poly1305",
  "common_messages_sv2",
  "const_sv2",

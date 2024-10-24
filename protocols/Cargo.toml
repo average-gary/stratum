@@ -20,6 +20,9 @@ members = [
     "v2/roles-logic-sv2",
 ]
 
+[workspace.dependencies]
+cdk = { path = "../../cdk" }
+
 [profile.dev]
 # Required by super_safe_lock
 opt-level = 1

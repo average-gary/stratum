@@ -184,7 +184,6 @@ impl TranslatorSv2 {
             target.clone(),
             diff_config.clone(),
             task_collector_upstream,
-            None,
         )
         .await
         {
@@ -240,7 +239,22 @@ impl TranslatorSv2 {
             }
 
             let task_collector_bridge = task_collector_init_task.clone();
+            
+            use cdk::cdk_database::WalletMemoryDatabase;
+            use cdk::nuts::CurrencyUnit;
+            use cdk::wallet::Wallet;
+            use rand::Rng;
+        
+            let seed = rand::thread_rng().gen::<[u8; 32]>();
+            let mint_url = "https://testnut.cashu.space";
+            let unit = CurrencyUnit::Hash;
+        
+            let localstore = WalletMemoryDatabase::default();
+            let wallet = Wallet::new(mint_url, unit, Arc::new(localstore), &seed, None);
+            let keysets = wallet.get_mint_keysets().await;
+            let wallet = Arc::new(RwLock::new(wallet));
             // Instantiate a new `Bridge` and begins handling incoming messages
+            // TODO: AVNPRC - put wallet into bridge from TranslatorSv2
             let b = proxy::Bridge::new(
                 rx_sv1_downstream,
                 tx_sv2_submit_shares_ext,
@@ -252,6 +266,8 @@ impl TranslatorSv2 {
                 target,
                 up_id,
                 task_collector_bridge,
+                wallet,
+                mint_pubkey
             );
             proxy::Bridge::start(b.clone());
 

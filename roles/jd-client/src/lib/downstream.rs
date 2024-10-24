@@ -537,6 +537,7 @@ impl
                 kind,
                 coinbase_outputs,
                 "SOLO".to_string(),
+                PubKey::from([0; 32])
             );
             self.status.set_channel(channel_factory);
 

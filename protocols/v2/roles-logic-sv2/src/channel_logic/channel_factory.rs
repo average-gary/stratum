@@ -7,12 +7,14 @@ use crate::{
     Error,
 };
 
+use binary_sv2::PubKey;
 use mining_sv2::{
     ExtendedExtranonce, NewExtendedMiningJob, NewMiningJob, OpenExtendedMiningChannelSuccess,
     OpenMiningChannelError, OpenStandardMiningChannelSuccess, SetCustomMiningJob,
     SetCustomMiningJobSuccess, SetNewPrevHash, SubmitSharesError, SubmitSharesExtended,
     SubmitSharesStandard, Target,
 };
+use cdk::wallet::Wallet;
 
 use nohash_hasher::BuildNoHashHasher;
 use std::{collections::HashMap, convert::TryInto, sync::Arc};
@@ -21,12 +23,8 @@ use template_distribution_sv2::{NewTemplate, SetNewPrevHash as SetNewPrevHashFro
 use tracing::{debug, error, info, trace, warn};
 
 use stratum_common::{
-    bitcoin,
-    bitcoin::{
-        hash_types,
-        hashes::{hex::ToHex, sha256d::Hash, Hash as Hash_},
-        TxOut,
-    },
+    bitcoin::{self, hash_types, hashes::{hex::ToHex, sha256d::Hash, Hash as Hash_}, TxOut},
+    secp256k1::PublicKey,
 };
 
 /// A stripped type of `SetCustomMiningJob` without the (`channel_id, `request_id` and `token`) fields
@@ -216,6 +214,8 @@ struct ChannelFactory {
     job_ids: Id,
     channel_to_group_id: HashMap<u32, u32, BuildNoHashHasher<u32>>,
     future_templates: HashMap<u32, NewTemplate<'static>, BuildNoHashHasher<u32>>,
+    wallet: Option<Arc<Mutex<Wallet>>>,
+    mint_pubkey: Option<PublicKey>
 }
 
 impl ChannelFactory {
@@ -248,6 +248,7 @@ impl ChannelFactory {
         request_id: u32,
         hash_rate: f32,
         min_extranonce_size: u16,
+        pubkey: PubKey
     ) -> Result<Vec<Mining<'static>>, Error> {
         let extended_channels_group = 0;
         let max_extranonce_size = self.extranonces.get_range2_len() as u16;
@@ -280,13 +281,14 @@ impl ChannelFactory {
             let extranonce_prefix = extranonce
                 .into_prefix(self.extranonces.get_prefix_len())
                 .unwrap();
+            let pubkey = pubkey.into_static();
             let success = OpenExtendedMiningChannelSuccess {
                 request_id,
                 channel_id,
                 target,
                 extranonce_size: max_extranonce_size,
                 extranonce_prefix,
-                pubkey: 
+                pubkey
             };
             self.extended_channels.insert(channel_id, success.clone());
             let mut result = vec![Mining::OpenExtendedMiningChannelSuccess(success)];
@@ -314,6 +316,7 @@ impl ChannelFactory {
             )])
         }
     }
+
     /// Called when we want to replicate a channel already opened by another actor.
     /// is used only in the jd client from the template provider module to mock a pool.
     /// Anything else should open channel with the new_extended_channel function
@@ -332,6 +335,7 @@ impl ChannelFactory {
             target,
             extranonce_size,
             extranonce_prefix,
+            pubkey: PubKey::from([0; 32])
         };
         self.extended_channels.insert(channel_id, success.clone());
         Some(())
@@ -977,7 +981,7 @@ pub struct PoolChannelFactory {
     // extedned_channel_id -> SetCustomMiningJob
     negotiated_jobs: HashMap<u32, SetCustomMiningJob<'static>, BuildNoHashHasher<u32>>,
     // TODO use the whole keyset instead of one key
-    mint_pubkey: PubKey,
+    mint_pubkey: PubKey<'static>,
 }
 
 impl PoolChannelFactory {
@@ -989,8 +993,9 @@ impl PoolChannelFactory {
         kind: ExtendedChannelKind,
         pool_coinbase_outputs: Vec<TxOut>,
         pool_signature: String,
-        pubkey: PubKey,
+        mint_pubkey: PubKey,
     ) -> Self {
+        let pubkey = PublicKey::from_slice(mint_pubkey.inner_as_ref()).unwrap();
         let inner = ChannelFactory {
             ids,
             standard_channels_for_non_hom_downstreams: HashMap::with_hasher(
@@ -1010,6 +1015,8 @@ impl PoolChannelFactory {
             job_ids: Id::new(),
             channel_to_group_id: HashMap::with_hasher(BuildNoHashHasher::default()),
             future_templates: HashMap::with_hasher(BuildNoHashHasher::default()),
+            wallet: None,
+            mint_pubkey: Some(pubkey)
         };
 
         Self {
@@ -1018,6 +1025,7 @@ impl PoolChannelFactory {
             pool_coinbase_outputs,
             pool_signature,
             negotiated_jobs: HashMap::with_hasher(BuildNoHashHasher::default()),
+            mint_pubkey: mint_pubkey.into_static()
         }
     }
     /// Calls [`ChannelFactory::add_standard_channel`]
@@ -1039,7 +1047,7 @@ impl PoolChannelFactory {
         min_extranonce_size: u16,
     ) -> Result<Vec<Mining<'static>>, Error> {
         self.inner
-            .new_extended_channel(request_id, hash_rate, min_extranonce_size)
+            .new_extended_channel(request_id, hash_rate, min_extranonce_size, self.mint_pubkey.clone())
     }
     /// Called when we want to replicate a channel already opened by another actor.
     /// is used only in the jd client from the template provider module to mock a pool.
@@ -1288,7 +1296,7 @@ impl PoolChannelFactory {
     }
 }
 
-/// Used by proxies that want to open extended channls with upstream. If the proxy has job
+/// Used by proxies that want to open extended channels with upstream. If the proxy has job
 /// declaration capabilities, we set the job creator and the coinbase outs.
 #[derive(Debug)]
 pub struct ProxyExtendedChannelFactory {
@@ -1298,6 +1306,7 @@ pub struct ProxyExtendedChannelFactory {
     pool_signature: String,
     // Id assigned to the extended channel by upstream
     extended_channel_id: u32,
+    wallet: Option<Arc<Mutex<Wallet>>>
 }
 
 impl ProxyExtendedChannelFactory {
@@ -1311,6 +1320,7 @@ impl ProxyExtendedChannelFactory {
         pool_coinbase_outputs: Option<Vec<TxOut>>,
         pool_signature: String,
         extended_channel_id: u32,
+        wallet: Arc<Mutex<Wallet>>
     ) -> Self {
         match &kind {
             ExtendedChannelKind::Proxy { .. } => {
@@ -1344,6 +1354,8 @@ impl ProxyExtendedChannelFactory {
             job_ids: Id::new(),
             channel_to_group_id: HashMap::with_hasher(BuildNoHashHasher::default()),
             future_templates: HashMap::with_hasher(BuildNoHashHasher::default()),
+            wallet: None,
+            mint_pubkey: None
         };
         ProxyExtendedChannelFactory {
             inner,
@@ -1351,6 +1363,7 @@ impl ProxyExtendedChannelFactory {
             pool_coinbase_outputs,
             pool_signature,
             extended_channel_id,
+            wallet: Some(wallet)
         }
     }
     /// Calls [`ChannelFactory::add_standard_channel`]
@@ -1372,7 +1385,7 @@ impl ProxyExtendedChannelFactory {
         min_extranonce_size: u16,
     ) -> Result<Vec<Mining>, Error> {
         self.inner
-            .new_extended_channel(request_id, hash_rate, min_extranonce_size)
+            .new_extended_channel(request_id, hash_rate, min_extranonce_size, PubKey::from([0; 32]))
     }
     /// Called only when a new prev hash is received by a Template Provider when job declaration is used.
     /// It matches the message with a `job_id`, creates a new custom job, and calls [`ChannelFactory::on_new_prev_hash`]
@@ -1881,6 +1894,7 @@ mod test {
             channel_kind,
             vec![out],
             pool_signature,
+            PubKey::from([0; 32]),
         );
 
         // Build a NewTemplate

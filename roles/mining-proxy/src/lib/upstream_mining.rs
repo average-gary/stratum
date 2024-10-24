@@ -89,6 +89,7 @@ impl ChannelKind {
                     Some(vec![]),
                     String::from(""),
                     up_id,
+                    None
                 );
                 *self = Self::Extended(Some(factory));
             }
