@@ -10,7 +10,7 @@ use crate::{
 };
 use async_channel::{Receiver, Sender};
 use async_std::net::TcpStream;
-use binary_sv2::u256_from_int;
+use binary_sv2::{u256_from_int, PubKey};
 use codec_sv2::{HandshakeRole, Initiator};
 use error_handling::handle_result;
 use key_utils::Secp256k1PublicKey;
@@ -42,7 +42,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use stratum_common::bitcoin::BlockHash;
+use stratum_common::bitcoin::{util::bip32::ExtendedPrivKey, BlockHash};
 
 pub static IS_NEW_JOB_HANDLED: AtomicBool = AtomicBool::new(true);
 /// Represents the currently active `prevhash` of the mining job being worked on OR being submitted
@@ -100,6 +100,8 @@ pub struct Upstream {
     // than the configured percentage
     pub(super) difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+    mint_pubkey: Option<PubKey>,
+    wallet_xpriv: ExtendedPrivKey,
 }
 
 impl PartialEq for Upstream {
@@ -159,6 +161,9 @@ impl Upstream {
         // channel for downstream Translator Proxy communication
         let connection = UpstreamConnection { receiver, sender };
 
+        let wallet_xpriv = ExtendedPrivKey::new_master(bitcoin::Network::Bitcoin, rand::thread_rng())?;
+        info!("wallet_xpriv: {:?}", wallet_xpriv);
+
         Ok(Arc::new(Mutex::new(Self {
             connection,
             rx_sv2_submit_shares_ext,
@@ -175,6 +180,8 @@ impl Upstream {
             target,
             difficulty_config,
             task_collector,
+            mint_pubkey: None,
+            wallet_xpriv,
         })))
     }
 
@@ -360,6 +367,11 @@ impl Upstream {
                     Ok(SendTo::None(Some(m))) => {
                         match m {
                             Mining::OpenExtendedMiningChannelSuccess(m) => {
+                                self_
+                                .safe_lock(|u: &mut Upstream| {
+                                    u.mint_pubkey = Some(m.pubkey);
+                                })
+                                .map_err(|_e| PoisonLock);
                                 let prefix_len = m.extranonce_prefix.len();
                                 // update upstream_extranonce1_size for tracking
                                 let miner_extranonce2_size = self_
@@ -564,8 +576,6 @@ impl Upstream {
                 firmware,
                 device_id,
             },
-            // TODO where to get keyset_id from?
-            keyset_id: 0,
         })
     }
 }
@@ -629,7 +639,8 @@ impl ParseUpstreamCommonMessages<NoRouting> for Upstream {
         setup_connection_success_mint: roles_logic_sv2::common_messages_sv2::SetupConnectionSuccessMint,
     ) -> Result<SendToCommon, RolesLogicError> {
         // TODO remove debug logging or change to debug!()
-        println!("setup_connection_success_mint.keyset_id {:?}", setup_connection_success_mint.keyset_id);
+        // println!("setup_connection_success_mint.keyset_id {:?}", setup_connection_success_mint.keyset_id);
+        self.keyset_id = Some(setup_connection_success_mint.keyset_id);
         Ok(SendToCommon::None(None))
     }
 

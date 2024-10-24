@@ -2,7 +2,8 @@
 use alloc::vec::Vec;
 #[cfg(not(feature = "with_serde"))]
 use binary_sv2::binary_codec_sv2;
-use binary_sv2::{Deserialize, Serialize, Str0255, B032};
+use binary_sv2::{Deserialize, PubKey, Serialize, Str0255, B032};
+use cdk::nuts::BlindedMessage;
 #[cfg(not(feature = "with_serde"))]
 use core::convert::TryInto;
 
@@ -57,6 +58,7 @@ pub struct SubmitSharesExtended<'decoder> {
     /// from channel opening.
     #[cfg_attr(feature = "with_serde", serde(borrow))]
     pub extranonce: B032<'decoder>,
+    pub blinded_message: PubKey<'decoder>,
 }
 
 /// # SubmitShares.Success (Server -> Client)

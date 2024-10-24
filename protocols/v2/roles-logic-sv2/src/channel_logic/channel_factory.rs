@@ -88,6 +88,7 @@ impl OnNewShare {
                         ntime: share.ntime,
                         version: share.version,
                         extranonce: extranonce.try_into().unwrap(),
+                        blinded_message: PubKey::from([0; 32]),
                     };
                     *self = Self::SendSubmitShareUpstream((Share::Extended(share), *template_id));
                 }
@@ -104,6 +105,7 @@ impl OnNewShare {
                         ntime: share.ntime,
                         version: share.version,
                         extranonce: extranonce.try_into().unwrap(),
+                        blinded_message: PubKey::from([0; 32]),
                     };
                     *self = Self::ShareMeetBitcoinTarget((
                         Share::Extended(share),
@@ -284,6 +286,7 @@ impl ChannelFactory {
                 target,
                 extranonce_size: max_extranonce_size,
                 extranonce_prefix,
+                pubkey: 
             };
             self.extended_channels.insert(channel_id, success.clone());
             let mut result = vec![Mining::OpenExtendedMiningChannelSuccess(success)];
@@ -973,6 +976,8 @@ pub struct PoolChannelFactory {
     pool_signature: String,
     // extedned_channel_id -> SetCustomMiningJob
     negotiated_jobs: HashMap<u32, SetCustomMiningJob<'static>, BuildNoHashHasher<u32>>,
+    // TODO use the whole keyset instead of one key
+    mint_pubkey: PubKey,
 }
 
 impl PoolChannelFactory {
@@ -984,6 +989,7 @@ impl PoolChannelFactory {
         kind: ExtendedChannelKind,
         pool_coinbase_outputs: Vec<TxOut>,
         pool_signature: String,
+        pubkey: PubKey,
     ) -> Self {
         let inner = ChannelFactory {
             ids,

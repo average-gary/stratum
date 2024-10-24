@@ -619,6 +619,13 @@ impl Pool {
         let creator = JobsCreators::new(extranonce_len as u8);
         let share_per_min = 1.0;
         let kind = roles_logic_sv2::channel_logic::channel_factory::ExtendedChannelKind::Pool;
+
+        // get the keyset from the mint
+        let key_set = mint.safe_lock(|m| m.get_key_set()).expect("Failed to get key set from mint");
+        let first_pubkey = key_set
+            .get_first_pubkey()
+            .expect("Failed to get first pubkey from key set");
+
         let channel_factory = Arc::new(Mutex::new(PoolChannelFactory::new(
             ids,
             extranonces,
@@ -627,6 +634,7 @@ impl Pool {
             kind,
             pool_coinbase_outputs.expect("Invalid coinbase output in config"),
             config.pool_signature.clone(),
+            first_pubkey,
         )));
         let pool = Arc::new(Mutex::new(Pool {
             downstreams: HashMap::with_hasher(BuildNoHashHasher::default()),

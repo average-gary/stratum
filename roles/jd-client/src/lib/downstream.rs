@@ -706,7 +706,7 @@ impl ParseDownstreamCommonMessages<roles_logic_sv2::routing_logic::NoRouting>
         setup_connection_mint: SetupConnectionMint,
         _: Option<Result<(CommonDownstreamData, SetupConnectionSuccessMint), Error>>,
     ) -> Result<roles_logic_sv2::handlers::common::SendTo, Error> {
-        self.keyset_id.write().unwrap().replace(setup_connection_mint.keyset_id);
+        // self.keyset_id.write().unwrap().replace(setup_connection_mint.keyset_id);
 
         let response = SetupConnectionSuccessMint {
             used_version: 2,

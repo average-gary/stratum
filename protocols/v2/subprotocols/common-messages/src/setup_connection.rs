@@ -148,7 +148,7 @@ impl<'decoder> SetupConnection<'decoder> {
 pub struct SetupConnectionMint<'decoder> {
     // Reuse SetupConnection as a field
     pub base: SetupConnection<'decoder>,
-    pub keyset_id: u64,
+    // pub keyset_id: u64,
 }
 
 impl<'decoder> SetupConnectionMint<'decoder> {

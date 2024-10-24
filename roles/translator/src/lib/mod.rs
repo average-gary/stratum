@@ -184,6 +184,7 @@ impl TranslatorSv2 {
             target.clone(),
             diff_config.clone(),
             task_collector_upstream,
+            None,
         )
         .await
         {
