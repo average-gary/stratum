@@ -14,6 +14,7 @@ use binary_sv2::{u256_from_int, PubKey};
 use cdk::wallet::Wallet;
 use codec_sv2::{HandshakeRole, Initiator};
 use error_handling::handle_result;
+use futures::lock;
 use key_utils::Secp256k1PublicKey;
 use network_helpers_sv2::Connection;
 use roles_logic_sv2::{
@@ -102,7 +103,7 @@ pub struct Upstream {
     pub(super) difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     mint_pubkey: Option<Arc<Mutex<PubKey>>>,
-    wallet: Option<Arc<Mutex<Wallet>>>,
+    wallet: Option<Arc<async_std::sync::Mutex<Wallet>>>,
 }
 
 impl PartialEq for Upstream {
@@ -130,6 +131,7 @@ impl Upstream {
         target: Arc<Mutex<Vec<u8>>>,
         difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+        wallet: Option<Arc<async_std::sync::Mutex<Wallet>>>
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
         // Connect to the SV2 Upstream role retry connection every 5 seconds.
         let socket = loop {
@@ -182,7 +184,7 @@ impl Upstream {
             difficulty_config,
             task_collector,
             mint_pubkey: None,
-            wallet_xpriv,
+            wallet
         })))
     }
 
@@ -486,7 +488,7 @@ impl Upstream {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn handle_submit(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
+    pub async fn handle_submit(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
         let task_collector = self_.safe_lock(|s| s.task_collector.clone()).unwrap();
         let clone = self_.clone();
         let (tx_frame, receiver, tx_status, mint_pubkey, wallet) = clone
@@ -524,15 +526,17 @@ impl Upstream {
                 // create premint secrets from pubkey
                 match wallet {
                     Some(x) => {
-                        x.safe_lock(|x_w| {
-                            let count = x_w.count
-                            let premint_secret = x_w.generate_premint_secret(count).unwrap();
-                        })
+                        let mut locked_wallet = x.lock.await;
+                        let count = locked_wallet.get_keyset_count().await?;
+                        let premint = locked_wallet.generate_premint_secret(count).unwrap();
+                        locked_wallet.increment_keyset_count_by_one().await;
+                        info!("premint from count {}: {:?}", count, premint);
+                        sv2_submit.blinded_message = premint.blinded_message;
+                        drop(locked_wallet);
                     },
-                    None => todo!(),
+                    _ => (),
                 }
                 // store in wallet?
-                sv2_submit.blinded_message = todo!();
 
                 let message = Message::Mining(
                     roles_logic_sv2::parsers::Mining::SubmitSharesExtended(sv2_submit),

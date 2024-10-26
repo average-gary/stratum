@@ -9,6 +9,11 @@ use std::{
     sync::Arc,
 };
 
+use cdk::cdk_database::WalletMemoryDatabase;
+use cdk::nuts::CurrencyUnit;
+use cdk::wallet::Wallet;
+use rand::Rng;
+
 use tokio::{
     sync::broadcast,
     task::{self, AbortHandle},
@@ -138,6 +143,17 @@ impl TranslatorSv2 {
         tx_status: async_channel::Sender<Status<'static>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
+        
+        // Create the ecash wallet
+        let seed = rand::thread_rng().gen::<[u8; 32]>();
+        let mint_url = "https://testnut.cashu.space";
+        let unit = CurrencyUnit::Hash;
+    
+        let localstore = WalletMemoryDatabase::default();
+        let wallet = Wallet::new(mint_url, unit, Arc::new(localstore), &seed, None);
+        let keysets = wallet.get_mint_keysets().await;
+        let wallet = Arc::new(RwLock::new(wallet));
+
         let proxy_config = self.config.clone();
         // Sender/Receiver to send a SV2 `SubmitSharesExtended` from the `Bridge` to the `Upstream`
         // (Sender<SubmitSharesExtended<'static>>, Receiver<SubmitSharesExtended<'static>>)
@@ -184,6 +200,7 @@ impl TranslatorSv2 {
             target.clone(),
             diff_config.clone(),
             task_collector_upstream,
+            wallet
         )
         .await
         {
@@ -240,19 +257,6 @@ impl TranslatorSv2 {
 
             let task_collector_bridge = task_collector_init_task.clone();
             
-            use cdk::cdk_database::WalletMemoryDatabase;
-            use cdk::nuts::CurrencyUnit;
-            use cdk::wallet::Wallet;
-            use rand::Rng;
-        
-            let seed = rand::thread_rng().gen::<[u8; 32]>();
-            let mint_url = "https://testnut.cashu.space";
-            let unit = CurrencyUnit::Hash;
-        
-            let localstore = WalletMemoryDatabase::default();
-            let wallet = Wallet::new(mint_url, unit, Arc::new(localstore), &seed, None);
-            let keysets = wallet.get_mint_keysets().await;
-            let wallet = Arc::new(RwLock::new(wallet));
             // Instantiate a new `Bridge` and begins handling incoming messages
             // TODO: AVNPRC - put wallet into bridge from TranslatorSv2
             let b = proxy::Bridge::new(
