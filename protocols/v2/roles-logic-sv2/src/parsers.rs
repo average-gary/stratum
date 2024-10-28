@@ -142,7 +142,7 @@ pub enum Mining<'a> {
     #[cfg_attr(feature = "with_serde", serde(borrow))]
     SubmitSharesExtended(SubmitSharesExtended<'a>),
     SubmitSharesStandard(SubmitSharesStandard),
-    SubmitSharesSuccess(SubmitSharesSuccess),
+    SubmitSharesSuccess(SubmitSharesSuccess<'a>),
     #[cfg_attr(feature = "with_serde", serde(borrow))]
     UpdateChannel(UpdateChannel<'a>),
     #[cfg_attr(feature = "with_serde", serde(borrow))]
@@ -181,7 +181,7 @@ impl<'a> Mining<'a> {
             Mining::SubmitSharesError(m) => Mining::SubmitSharesError(m.into_static()),
             Mining::SubmitSharesExtended(m) => Mining::SubmitSharesExtended(m.into_static()),
             Mining::SubmitSharesStandard(m) => Mining::SubmitSharesStandard(m),
-            Mining::SubmitSharesSuccess(m) => Mining::SubmitSharesSuccess(m),
+            Mining::SubmitSharesSuccess(m) => Mining::SubmitSharesSuccess(m.into_static()),
             Mining::UpdateChannel(m) => Mining::UpdateChannel(m.into_static()),
             Mining::UpdateChannelError(m) => Mining::UpdateChannelError(m.into_static()),
         }

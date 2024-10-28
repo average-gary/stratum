@@ -1,4 +1,5 @@
 use super::super::mining_pool::Downstream;
+use cdk::nuts::{BlindSignature, PublicKey};
 use roles_logic_sv2::{
     errors::Error,
     handlers::mining::{ParseDownstreamMiningMessages, SendTo, SupportedChannelTypes},
@@ -10,7 +11,7 @@ use roles_logic_sv2::{
     utils::Mutex,
 };
 use std::{convert::TryInto, sync::Arc};
-use tracing::error;
+use tracing::{error, info};
 
 impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> for Downstream {
     fn get_channel_type(&self) -> SupportedChannelTypes {
@@ -129,6 +130,8 @@ impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> 
                         last_sequence_number: m.sequence_number,
                         new_submits_accepted_count: 1,
                         new_shares_sum: 0,
+                        // TODO, implement for standard share
+                        blinded_signature: PublicKey::from(0)
                     };
 
                     Ok(SendTo::Respond(Mining::SubmitSharesSuccess(success)))
@@ -140,7 +143,9 @@ impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> 
                         last_sequence_number: m.sequence_number,
                         new_submits_accepted_count: 1,
                         new_shares_sum: 0,
-                    };
+                        // TODO, implement for standard share
+                        blinded_signature: PublicKey::from(0),
+                 };
                     Ok(SendTo::Respond(Mining::SubmitSharesSuccess(success)))
                 },
             },
@@ -175,22 +180,36 @@ impl ParseDownstreamMiningMessages<(), NullDownstreamMiningSelector, NoRouting> 
                         // TODO we can block everything with the below (looks like this will infinite loop??)
                         while self.solution_sender.try_send(solution.clone()).is_err() {};
                     }
+                    // SIGN THE MESSAGE
+                    let mut blinded_signature: BlindSignature;
+                    self.mint.safe_lock(|x| {
+                        blinded_signature = x.blind_sign(m.blinded_message).unwrap();
+                    });
+                    info!("blinded_signature: {:?}", blinded_signature);
                     let success = SubmitSharesSuccess {
                         channel_id: m.channel_id,
                         last_sequence_number: m.sequence_number,
                         new_submits_accepted_count: 1,
                         new_shares_sum: 0,
+                        blinded_signature
                     };
 
                     Ok(SendTo::Respond(Mining::SubmitSharesSuccess(success)))
 
                 },
                 roles_logic_sv2::channel_logic::channel_factory::OnNewShare::ShareMeetDownstreamTarget => {
+                    // SIGN THE MESSAGE
+                    let mut blinded_signature: BlindSignature;
+                    self.mint.safe_lock(|x| {
+                        blinded_signature = x.blind_sign(m.blinded_message).unwrap();
+                    });
+                    info!("blinded_signature: {:?}", blinded_signature);
                 let success = SubmitSharesSuccess {
                         channel_id: m.channel_id,
                         last_sequence_number: m.sequence_number,
                         new_submits_accepted_count: 1,
                         new_shares_sum: 0,
+                        blinded_signature
                     };
                     Ok(SendTo::Respond(Mining::SubmitSharesSuccess(success)))
                 },
