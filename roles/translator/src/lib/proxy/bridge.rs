@@ -321,13 +321,10 @@ impl Bridge {
         let premint_secret: Result<cdk::nuts::PreMintSecrets, cdk::wallet::error::Error> = {
             let wallet = self.wallet.write().unwrap();
             let counter = wallet.get_key_counter().await?;
-            let wallet_xpriv = 
-            let derived_xpriv = 
-            // PreMintSecrets::from_xpriv()
-            // Secret::from_xpriv()
-            //
+            let wallet_xpriv = wallet.generate_premint_secret(counter).unwrap(); 
+            wallet.increment_keyset_count_by_one().await?;
         };
-
+        info!("{:?}", premint_secret);
         premint_secret
     }
 
@@ -633,6 +630,12 @@ mod test {
             };
 
             let task_collector = Arc::new(Mutex::new(vec![]));
+            let seed = rand::thread_rng().gen::<[u8; 32]>();
+            let mint_url = "https://testnut.cashu.space";
+            let unit = CurrencyUnit::Sat;
+          
+            let localstore = WalletMemoryDatabase::default();
+            let wallet = Wallet::new(mint_url, unit, Arc::new(localstore), &seed, None);
             let b = Bridge::new(
                 rx_sv1_submit,
                 tx_sv2_submit_shares_ext,
@@ -644,6 +647,8 @@ mod test {
                 Arc::new(Mutex::new(upstream_target)),
                 1,
                 task_collector,
+                Some(wallet),
+                Some(PublicKey::from([0; 32]))
             );
             (b, interface)
         }
