@@ -3,124 +3,154 @@
   "title": "mpsc in SRI",
   "steps": [
     {
-      "file": "src/main.rs",
+      "file": "roles/translator/src/main.rs",
       "description": "We start in `main` and jump right into `start` for the `TranslatorSv2`. The `new()` isn't very interesting for this tour and should be simple enough for you to grok yourself.",
       "line": 48
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "BOOM! Right of the bat we create an unbounded channel. This is a way to pass messages between threads. ",
       "line": 48
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "We pass this the transmitter for the channel into this `internal_start` function. What does that do?.... ",
       "line": 64
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "Interesting! another channel. This one with bounded messages that can be in the queue. Good comments here hint as to the purpose of this channel. But we haven't deduced what `tx_status` (our `Sender` of `Status`) is for yet.",
       "line": 145
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "\\< insert another_one.gif \\>",
       "line": 151
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "OK, you get the idea. There is EXTENSIVE use of these async channels in this codebase.",
       "line": 156
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "Here we are finally. `tx_status` is being passed to a new `Upstream`. (Along with a bunch of other channel senders and receivers, but let's stay focused)",
       "line": 185
     },
     {
-      "file": "src/lib/status.rs",
+      "file": "roles/translator/src/lib/status.rs",
       "description": "Wait, what? A nice helper enum so we can classify and organize all these channels. Nice.",
       "line": 8
     },
     {
-      "file": "src/lib/upstream_sv2/upstream.rs",
+      "file": "roles/translator/src/lib/upstream_sv2/upstream.rs",
       "description": "We've got a `Sender` now! Recall this is just an enum wrapper with some helper functions for your async channel. And this `tx_status` started waaaaayyyy back in the `Translator` `start()` function. We've just been cloning it to pass it to other \"things\" (more on what the things do with it later...)",
       "line": 128
     },
     {
-      "file": "src/lib/upstream_sv2/upstream.rs",
+      "file": "roles/translator/src/lib/upstream_sv2/upstream.rs",
       "description": "Ok. We have an `Upstream` with a `tx_status` now. Where is it used?",
       "line": 177
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "We're back here now with a brand new `Upstream`.",
       "line": 177
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "Do we use `tx_status` here? MAYBE!",
       "line": 205
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "We don't. It's used in this `parse_incoming` instead. Let's explore.",
       "line": 220
     },
     {
-      "file": "src/lib/upstream_sv2/upstream.rs",
+      "file": "roles/translator/src/lib/upstream_sv2/upstream.rs",
       "description": "Whoa. What?\nFor the non-Rusty ppl, this is where we lock the `Mutex` that has out `Upstream` so we can then reference it below. This bracket defines the scope that we'll have `self` available so we can access that `tx_status` we so desperately want to understand.",
       "line": 273
     },
     {
-      "file": "src/lib/upstream_sv2/upstream.rs",
+      "file": "roles/translator/src/lib/upstream_sv2/upstream.rs",
       "description": "Huh. A macro. For handling a result. What does this do??? Based solely on context clues here, I'd guess we're attempting to update hashrate. Whatever that means. For this walkthrough, it's irrelevant. It's the thing we want to do and somehow this macro incorporates `tx_status` into it. Let's explore the macro.",
       "line": 299
     },
     {
-      "file": "../../utils/error-handling/src/lib.rs",
+      "file": "utils/error-handling/src/lib.rs",
       "description": "OK. So we call a function and `match` the result and if we get and `Err` we do a thing. That thing being `crate::status::handle_error`. So this `tx_status` thing is just something for error handling. Makes sense why it was instantiated so early and at such a top level. Let's keep going. Remember this is a message sender.",
       "line": 30
     },
     {
-      "file": "../../utils/error-handling/src/lib.rs",
+      "file": utils/error-handling/src/lib.rs",
       "description": "Great comments here!",
       "line": 2
     },
     {
-      "file": "src/lib/status.rs",
+      "file": "roles/translator/src/lib/status.rs",
       "description": "Here we find the `send_status` function that follows the macro's required need for a `crate::status::send_status` function.",
       "line": 60
     },
     {
-      "file": "src/lib/status.rs",
+      "file": "roles/translator/src/lib/status.rs",
       "description": "Here's where `tx_status` is used as a function parameter.",
       "line": 61
     },
     {
-      "file": "src/lib/status.rs",
+      "file": "roles/translator/src/lib/status.rs",
       "description": "And in our tour here, wer're using a `Sender::Upstream`",
       "line": 87
     },
     {
-      "file": "src/lib/status.rs",
+      "file": "roles/translator/src/lib/status.rs",
       "description": "Finally! We're sending something using the `tx_status` `Sender`.\n\nIt seems we're sending either a reconnect or shutdown message. But where do we send it to...? Let's go back to the start and see where the receiving end of the channel ends up.",
       "line": 89
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "OK, we're back here in the `Translator::start` function. Luckily, we won't have to navigate far to see how this `rx_status` is being used.",
       "line": 48
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "Here we are! We're right at the start of our primary function loop so we'll be doing this every tick of the loop.\nUsing the `tokio::select`, we either get an interrupt signal using Ctrl+C (see line below this comment) and `break` from our loop OR we `rx_status.recv()` into a new variable: `task_status`",
       "line": 77
     },
     {
-      "file": "src/lib/mod.rs",
+      "file": "roles/translator/src/lib/mod.rs",
       "description": "After unwrapping the result, we check the `state` that was sent. Recall, in the instance of the `handle_result!` we examined that we either passed an `UpstreamTryReconnect` or `UpstreamShutdown` as the `state`",
       "line": 93
+    },
+    {
+      "file": "roles/translator/src/lib/upstream_sv2/upstream.rs",
+      "description": "Recall that this was the thread we were examining when we used the `handle_result!` macro. This one specifically was trying to update hashrate for the Upstream and doing some var diff management. If the `try_update_hashrate` function failed, then we send that failure along through the `tx_status` channel `Sender`. Let's see some failure cases so we can examine when we might want to `UpstreamShutdown` vs `UpstreamTryReconnect`.",
+      "line": 295
+    },
+    {
+      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
+      "description": "Here we are! With a nice doc comment about how this checks config for timing for update.",
+      "line": 15
+    },
+    {
+      "file": "roles/translator/src/lib/status.rs",
+      "description": "Recall in our send_status we only try a reconnect when we see a `ChannelErrorReceiver`",
+      "line": 88
+    },
+    {
+      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
+      "description": "Here we check for data integrity and fail if there is no ChannelId.",
+      "line": 25
+    },
+    {
+      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
+      "description": "`PoisonLock` would shutdown the Translator.",
+      "line": 30
+    },
+    {
+      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
+      "description": "Another failure that would lead to `UpstreamShutdown`",
+      "line": 38
     }
   ],
   "ref": "b32485d9dd263e92e6d6f541079c71518c8fd7cc"
