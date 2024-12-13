@@ -83,7 +83,7 @@
       "line": 30
     },
     {
-      "file": utils/error-handling/src/lib.rs",
+      "file": "utils/error-handling/src/lib.rs",
       "description": "Great comments here!",
       "line": 2
     },
@@ -134,23 +134,18 @@
     },
     {
       "file": "roles/translator/src/lib/status.rs",
-      "description": "Recall in our send_status we only try a reconnect when we see a `ChannelErrorReceiver`",
-      "line": 88
-    },
-    {
-      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
-      "description": "Here we check for data integrity and fail if there is no ChannelId.",
-      "line": 25
-    },
-    {
-      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
-      "description": "`PoisonLock` would shutdown the Translator.",
-      "line": 30
-    },
-    {
-      "file": "roles/translator/src/lib/upstream_sv2/diff_management.rs",
-      "description": "Another failure that would lead to `UpstreamShutdown`",
-      "line": 38
+      "description": "Recall in our send_status we only try a reconnect when we see a `ChannelErrorReceiver` which is only when we get a `async_channel::RecvError`. So in all other scenarios, we just shutdown the process.\n\nThanks for tuning in!",
+      "line": 88,
+      "selection": {
+        "start": {
+          "line": 88,
+          "character": 20
+        },
+        "end": {
+          "line": 88,
+          "character": 40
+        }
+      }
     }
   ],
   "ref": "b32485d9dd263e92e6d6f541079c71518c8fd7cc"
