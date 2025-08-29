@@ -3,6 +3,7 @@ resolver="2"
 
 members = [
     "pool",
+    "storage",
     "test-utils/mining-device",
     "test-utils/mining-device-sv1",
     "translator",

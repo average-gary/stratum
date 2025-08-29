@@ -1,0 +1,86 @@
+[package]
+name = "storage_sv2"
+version = "0.1.0"
+authors = ["The Stratum V2 Developers"]
+edition = "2021"
+description = "SV2 storage role for share accounting and validation data persistence"
+documentation = "https://docs.rs/storage_sv2"
+readme = "README.md"
+homepage = "https://stratumprotocol.org"
+repository = "https://github.com/stratum-mining/stratum"
+license = "MIT OR Apache-2.0"
+keywords = ["stratum", "mining", "bitcoin", "protocol", "storage"]
+
+[lib]
+name = "storage_sv2"
+path = "src/lib/mod.rs"
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1.0.89", features = ["derive", "alloc"], default-features = false }
+serde_json = "1.0"
+tokio = { version = "1.44.1", features = ["full"] }
+tracing = { version = "0.1" }
+tracing-subscriber = "0.3"
+error_handling = { path = "../../utils/error-handling" }
+stratum-common = { path = "../../common", optional = true }
+bitcoin = { version = "0.31.1", features = ["serde"] }
+ext-config = { version = "0.14.0", features = ["toml"], package = "config" }
+config_helpers_sv2 = { path = "../roles-utils/config-helpers" }
+clap = { version = "4.5.39", features = ["derive"] }
+
+# Optional backend implementations
+rocksdb = { version = "0.22", optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"], optional = true }
+
+[features]
+default = ["memory-backend"]
+
+# Storage backends (mutually exclusive in some contexts)
+memory-backend = []
+rocksdb-backend = ["rocksdb"]
+sqlite-backend = ["sqlx"]
+postgresql-backend = ["sqlx/postgres"]
+
+# Storage features (can be combined)
+metrics = []
+compression = []
+encryption = []
+replication = []
+
+# Build profiles
+minimal = ["memory-backend"]
+development = ["memory-backend", "metrics"] 
+production = ["rocksdb-backend", "metrics", "compression"]
+enterprise = ["postgresql-backend", "metrics", "compression", "encryption", "replication"]
+
+# Integration features
+pool-integration = ["stratum-common"]
+translator-integration = ["stratum-common"]
+jd-integration = ["stratum-common"]
+service-integration = ["stratum-common"]
+
+# Performance features
+async-writes = []
+batch-writes = []
+write-ahead-log = []
+
+[dev-dependencies]
+tempfile = "3.0"
+hex = "0.4.3"
+
+# Examples
+[[example]]
+name = "memory_backend"
+path = "examples/memory_backend.rs"
+required-features = ["memory-backend"]
+
+[[example]]
+name = "sqlite_backend"
+path = "examples/sqlite_backend.rs"
+required-features = ["sqlite-backend"]
+
+[[example]]
+name = "backend_comparison"
+path = "examples/backend_comparison.rs"
+required-features = ["memory-backend"]
