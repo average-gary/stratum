@@ -173,7 +173,7 @@ impl TryFrom<StandardRequest> for Submit<'_> {
                     [JString(a), JString(b), JString(c), JNumber(d), JNumber(e), JString(f)] => (
                         a.into(),
                         b.into(),
-                        Extranonce::try_from(hex::decode(c)?)?,
+                        Extranonce::try_from(c.as_str())?,
                         HexU32Be(d.as_u64().unwrap() as u32),
                         HexU32Be(e.as_u64().unwrap() as u32),
                         Some((f.as_str()).try_into()?),
@@ -181,7 +181,7 @@ impl TryFrom<StandardRequest> for Submit<'_> {
                     [JString(a), JString(b), JString(c), JString(d), JString(e), JString(f)] => (
                         a.into(),
                         b.into(),
-                        Extranonce::try_from(hex::decode(c)?)?,
+                        Extranonce::try_from(c.as_str())?,
                         (d.as_str()).try_into()?,
                         (e.as_str()).try_into()?,
                         Some((f.as_str()).try_into()?),
@@ -189,7 +189,7 @@ impl TryFrom<StandardRequest> for Submit<'_> {
                     [JString(a), JString(b), JString(c), JNumber(d), JNumber(e)] => (
                         a.into(),
                         b.into(),
-                        Extranonce::try_from(hex::decode(c)?)?,
+                        Extranonce::try_from(c.as_str())?,
                         HexU32Be(d.as_u64().unwrap() as u32),
                         HexU32Be(e.as_u64().unwrap() as u32),
                         None,
@@ -197,7 +197,7 @@ impl TryFrom<StandardRequest> for Submit<'_> {
                     [JString(a), JString(b), JString(c), JString(d), JString(e)] => (
                         a.into(),
                         b.into(),
-                        Extranonce::try_from(hex::decode(c)?)?,
+                        Extranonce::try_from(c.as_str())?,
                         (d.as_str()).try_into()?,
                         (e.as_str()).try_into()?,
                         None,
