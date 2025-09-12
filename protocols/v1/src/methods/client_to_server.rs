@@ -320,7 +320,7 @@ impl TryFrom<StandardRequest> for Subscribe<'_> {
                     // bosminer subscribe message
                     [JString(a), Null] => (a.into(), None),
                     [JString(a), JString(b)] => {
-                        (a.into(), Some(Extranonce::try_from(hex::decode(b)?)?))
+                        (a.into(), Some(Extranonce::try_from(b.as_str())?))
                     }
                     [JString(a)] => (a.into(), None),
                     [] => ("".to_string(), None),
