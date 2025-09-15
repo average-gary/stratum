@@ -780,3 +780,30 @@ fn test_submit_with_even_length_extranonce() {
     assert_eq!(submit.job_id, "job1");
     assert_eq!(submit.extra_nonce2.0.inner_as_ref(), &[0xab, 0xcd]); // "abcd" -> [171, 205]
 }
+
+#[test]
+fn test_demonstrate_original_hex_decode_failure() {
+    // This test demonstrates what would happen with the old code using hex::decode directly
+    // The old code would fail with HexError(OddLength) for odd-length hex strings
+    
+    // This is what the old problematic code looked like:
+    // Extranonce::try_from(hex::decode("abc")?)  // This would fail!
+    
+    // Let's demonstrate the failure by calling hex::decode directly on an odd-length string
+    let odd_length_hex = "abc";
+    let result = hex::decode(odd_length_hex);
+    
+    // This should fail with OddLength error
+    assert!(result.is_err());
+    match result {
+        Err(hex::FromHexError::OddLength) => {
+            // This is the error we were getting before the fix
+            println!("As expected, hex::decode fails with OddLength for '{}'", odd_length_hex);
+        }
+        _ => panic!("Expected OddLength error"),
+    }
+    
+    // But our fixed code using Extranonce::try_from works:
+    let extranonce = Extranonce::try_from(odd_length_hex).unwrap();
+    assert_eq!(extranonce.0.inner_as_ref(), &[0x0a, 0xbc]); // "0abc" -> [10, 188]
+}
