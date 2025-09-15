@@ -716,3 +716,67 @@ fn test_version_extension_with_no_bit_count() {
         _ => panic!(),
     };
 }
+
+#[test]
+fn test_subscribe_with_odd_length_extranonce() {
+    // Test that odd-length hex strings (with leading zeroes) are handled correctly
+    let client_message = r#"{"id":1,
+            "method": "mining.subscribe",
+            "params":["test-agent", "abc"]
+        }"#;
+    let client_message: StandardRequest = serde_json::from_str(client_message).unwrap();
+    let subscribe = Subscribe::try_from(client_message).unwrap();
+    
+    // Should successfully parse odd-length hex string by prepending "0"
+    assert_eq!(subscribe.agent_signature, "test-agent");
+    assert!(subscribe.extranonce1.is_some());
+    let extranonce = subscribe.extranonce1.unwrap();
+    assert_eq!(extranonce.0.inner_as_ref(), &[0x0a, 0xbc]); // "0abc" -> [10, 188]
+}
+
+#[test]
+fn test_subscribe_with_even_length_extranonce() {
+    // Test that even-length hex strings work as before
+    let client_message = r#"{"id":1,
+            "method": "mining.subscribe",
+            "params":["test-agent", "abcd"]
+        }"#;
+    let client_message: StandardRequest = serde_json::from_str(client_message).unwrap();
+    let subscribe = Subscribe::try_from(client_message).unwrap();
+    
+    assert_eq!(subscribe.agent_signature, "test-agent");
+    assert!(subscribe.extranonce1.is_some());
+    let extranonce = subscribe.extranonce1.unwrap();
+    assert_eq!(extranonce.0.inner_as_ref(), &[0xab, 0xcd]); // "abcd" -> [171, 205]
+}
+
+#[test]
+fn test_submit_with_odd_length_extranonce() {
+    // Test that Submit parsing also handles odd-length hex strings
+    let client_message = r#"{"id":1,
+            "method": "mining.submit",
+            "params":["user", "job1", "abc", "12345678", "87654321"]
+        }"#;
+    let client_message: StandardRequest = serde_json::from_str(client_message).unwrap();
+    let submit = Submit::try_from(client_message).unwrap();
+    
+    // Should successfully parse odd-length hex string by prepending "0"
+    assert_eq!(submit.user_name, "user");
+    assert_eq!(submit.job_id, "job1");
+    assert_eq!(submit.extra_nonce2.0.inner_as_ref(), &[0x0a, 0xbc]); // "0abc" -> [10, 188]
+}
+
+#[test]
+fn test_submit_with_even_length_extranonce() {
+    // Test that Submit parsing works with even-length hex strings
+    let client_message = r#"{"id":1,
+            "method": "mining.submit",
+            "params":["user", "job1", "abcd", "12345678", "87654321"]
+        }"#;
+    let client_message: StandardRequest = serde_json::from_str(client_message).unwrap();
+    let submit = Submit::try_from(client_message).unwrap();
+    
+    assert_eq!(submit.user_name, "user");
+    assert_eq!(submit.job_id, "job1");
+    assert_eq!(submit.extra_nonce2.0.inner_as_ref(), &[0xab, 0xcd]); // "abcd" -> [171, 205]
+}
