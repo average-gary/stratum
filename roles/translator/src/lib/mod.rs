@@ -75,19 +75,24 @@ impl TranslatorSv2 {
 
         debug!("Channels initialized.");
 
-        let upstream_addresses = self
-            .config
-            .upstreams
-            .iter()
-            .map(|upstream| {
-                let upstream_addr =
-                    SocketAddr::new(upstream.address.parse().unwrap(), upstream.port);
-                (upstream_addr, upstream.authority_pubkey)
-            })
-            .collect::<Vec<_>>();
+        // Initialize Iroh endpoint if needed
+        #[cfg(feature = "iroh")]
+        let iroh_endpoint = if self.needs_iroh_transport() {
+            match self.init_iroh_endpoint().await {
+                Ok(endpoint) => Some(endpoint),
+                Err(e) => {
+                    error!("Failed to initialize Iroh endpoint: {e:?}");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         let upstream = match Upstream::new(
-            &upstream_addresses,
+            &self.config.upstreams,
+            #[cfg(feature = "iroh")]
+            iroh_endpoint.as_ref(),
             upstream_to_channel_manager_sender.clone(),
             channel_manager_to_upstream_receiver.clone(),
             notify_shutdown.clone(),
@@ -151,6 +156,10 @@ impl TranslatorSv2 {
             return;
         }
 
+        // Clone data needed for reconnection
+        let upstreams_config = self.config.upstreams.clone();
+        #[cfg(feature = "iroh")]
+        let iroh_endpoint_clone = iroh_endpoint;
         let notify_shutdown_clone = notify_shutdown.clone();
         let shutdown_complete_tx_clone = shutdown_complete_tx.clone();
         let status_sender_clone = status_sender.clone();
@@ -184,7 +193,9 @@ impl TranslatorSv2 {
                                     warn!("Upstream connection dropped: {msg:?} — attempting reconnection...");
 
                                     match Upstream::new(
-                                        &upstream_addresses,
+                                        &upstreams_config,
+                                        #[cfg(feature = "iroh")]
+                                        iroh_endpoint_clone.as_ref(),
                                         upstream_to_channel_manager_sender.clone(),
                                         channel_manager_to_upstream_receiver.clone(),
                                         notify_shutdown_clone.clone(),
@@ -251,5 +262,116 @@ impl TranslatorSv2 {
         info!("Joining remaining tasks...");
         task_manager.join_all().await;
         info!("TranslatorSv2 shutdown complete.");
+    }
+
+    /// Checks if any upstream requires Iroh transport.
+    #[cfg(feature = "iroh")]
+    fn needs_iroh_transport(&self) -> bool {
+        self.config.upstreams.iter().any(|upstream| {
+            matches!(upstream.transport, config::UpstreamTransport::Iroh { .. })
+        })
+    }
+
+    /// Initializes the Iroh endpoint for P2P connections.
+    #[cfg(feature = "iroh")]
+    async fn init_iroh_endpoint(&self) -> Result<iroh::Endpoint, error::TproxyError> {
+        info!("Initializing Iroh endpoint for Translator");
+
+        // Load or generate secret key
+        let secret_key = if let Some(ref iroh_config) = self.config.iroh_config {
+            if let Some(ref path) = iroh_config.secret_key_path {
+                Self::load_or_generate_secret_key(Some(path.clone())).await?
+            } else {
+                Self::load_or_generate_secret_key(None).await?
+            }
+        } else {
+            Self::load_or_generate_secret_key(None).await?
+        };
+
+        // Build endpoint
+        let endpoint = iroh::Endpoint::builder()
+            .secret_key(secret_key)
+            .relay_mode(iroh::RelayMode::Default)
+            .bind()
+            .await
+            .map_err(|e| {
+                error::TproxyError::IrohConnectionFailed(format!("Failed to bind endpoint: {e:?}"))
+            })?;
+
+        let node_id = endpoint.node_id();
+        info!("Translator Iroh endpoint initialized. NodeId: {}", node_id);
+
+        Ok(endpoint)
+    }
+
+    /// Loads or generates an Iroh secret key.
+    #[cfg(feature = "iroh")]
+    async fn load_or_generate_secret_key(
+        secret_key_path: Option<std::path::PathBuf>,
+    ) -> Result<iroh::SecretKey, error::TproxyError> {
+        use tokio::fs;
+
+        if let Some(path) = secret_key_path {
+            // Try to load existing key
+            if path.exists() {
+                debug!("Loading Iroh secret key from {:?}", path);
+                let key_bytes = fs::read(&path).await.map_err(|e| {
+                    error::TproxyError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to read secret key: {e}"),
+                    ))
+                })?;
+
+                if key_bytes.len() != 32 {
+                    return Err(error::TproxyError::General(format!(
+                        "Invalid secret key length: expected 32 bytes, got {}",
+                        key_bytes.len()
+                    )));
+                }
+
+                let mut key_array = [0u8; 32];
+                key_array.copy_from_slice(&key_bytes);
+                let secret_key = iroh::SecretKey::from_bytes(&key_array);
+                info!("Loaded existing Iroh secret key from {:?}", path);
+                Ok(secret_key)
+            } else {
+                // Generate new key and save it
+                debug!("Generating new Iroh secret key and saving to {:?}", path);
+                let mut key_bytes = [0u8; 32];
+                use rand::RngCore;
+                rand::thread_rng().fill_bytes(&mut key_bytes);
+                let secret_key = iroh::SecretKey::from_bytes(&key_bytes);
+
+                // Create parent directories if they don't exist
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).await.map_err(|e| {
+                        error::TproxyError::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to create parent directories: {e}"),
+                        ))
+                    })?;
+                }
+
+                // Write key to file
+                fs::write(&path, secret_key.to_bytes()).await.map_err(|e| {
+                    error::TproxyError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to write secret key: {e}"),
+                    ))
+                })?;
+
+                info!("Generated and saved new Iroh secret key to {:?}", path);
+                Ok(secret_key)
+            }
+        } else {
+            // No path provided - use ephemeral key
+            debug!("No secret key path provided, using ephemeral Iroh secret key");
+            let mut key_bytes = [0u8; 32];
+            use rand::RngCore;
+            rand::thread_rng().fill_bytes(&mut key_bytes);
+            let secret_key = iroh::SecretKey::from_bytes(&key_bytes);
+            info!("Using ephemeral Iroh secret key (NodeId will change on restart)");
+            Ok(secret_key)
+        }
     }
 }

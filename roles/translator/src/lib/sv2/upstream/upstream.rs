@@ -1,4 +1,5 @@
 use crate::{
+    config,
     error::TproxyError,
     status::{handle_error, Status, StatusSender},
     sv2::upstream::channel::UpstreamChannelState,
@@ -23,6 +24,9 @@ use tokio::{
     time::{sleep, Duration},
 };
 use tracing::{debug, error, info, warn};
+
+#[cfg(feature = "iroh")]
+use network_helpers_sv2::iroh_connection::ConnectionIrohExt;
 
 /// Type alias for SV2 messages with static lifetime
 pub type Message = AnyMessage<'static>;
@@ -56,8 +60,11 @@ impl Upstream {
     /// servers, implementing retry logic and fallback behavior. It will attempt
     /// to connect to each server multiple times before giving up.
     ///
+    /// Supports both TCP and Iroh P2P transports (when the `iroh` feature is enabled).
+    ///
     /// # Arguments
-    /// * `upstreams` - List of (address, public_key) pairs for upstream servers
+    /// * `upstreams` - List of upstream configurations (TCP or Iroh)
+    /// * `iroh_endpoint` - Optional Iroh endpoint (required for Iroh transports)
     /// * `channel_manager_sender` - Channel to send messages to the channel manager
     /// * `channel_manager_receiver` - Channel to receive messages from the channel manager
     /// * `notify_shutdown` - Broadcast channel for shutdown coordination
@@ -67,7 +74,8 @@ impl Upstream {
     /// * `Ok(Upstream)` - Successfully connected to an upstream server
     /// * `Err(TproxyError)` - Failed to connect to any upstream server
     pub async fn new(
-        upstreams: &[(SocketAddr, Secp256k1PublicKey)],
+        upstreams: &[config::Upstream],
+        #[cfg(feature = "iroh")] iroh_endpoint: Option<&iroh::Endpoint>,
         channel_manager_sender: Sender<EitherFrame>,
         channel_manager_receiver: Receiver<EitherFrame>,
         notify_shutdown: broadcast::Sender<ShutdownMessage>,
@@ -76,8 +84,27 @@ impl Upstream {
         let mut shutdown_rx = notify_shutdown.subscribe();
         const RETRIES_PER_UPSTREAM: u8 = 3;
 
-        for (index, (addr, pubkey)) in upstreams.iter().enumerate() {
-            info!("Trying to connect to upstream {} at {}", index, addr);
+        for (index, upstream_config) in upstreams.iter().enumerate() {
+            #[cfg(feature = "iroh")]
+            let transport_type = match &upstream_config.transport {
+                config::UpstreamTransport::Tcp { address, port } => {
+                    format!("TCP at {}:{}", address, port)
+                }
+                config::UpstreamTransport::Iroh { node_id, alpn } => {
+                    format!("Iroh NodeId {} (ALPN: {})", node_id, alpn)
+                }
+            };
+
+            #[cfg(not(feature = "iroh"))]
+            let transport_type = format!(
+                "TCP at {}:{}",
+                upstream_config.address, upstream_config.port
+            );
+
+            info!(
+                "Trying to connect to upstream {} via {}",
+                index, transport_type
+            );
 
             for attempt in 1..=RETRIES_PER_UPSTREAM {
                 if shutdown_rx.try_recv().is_ok() {
@@ -86,34 +113,43 @@ impl Upstream {
                     return Err(TproxyError::Shutdown);
                 }
 
-                match TcpStream::connect(addr).await {
-                    Ok(socket) => {
-                        info!(
-                            "Connected to upstream at {addr} (attempt {attempt}/{RETRIES_PER_UPSTREAM})"
-                        );
-                        let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
-                        match Connection::new(socket, HandshakeRole::Initiator(initiator)).await {
-                            Ok((receiver, sender)) => {
-                                let upstream_channel_state = UpstreamChannelState::new(
-                                    channel_manager_sender,
-                                    channel_manager_receiver,
-                                    receiver,
-                                    sender,
-                                );
-                                debug!("Successfully initialized upstream channel with {addr}");
+                let pubkey = &upstream_config.authority_pubkey;
 
-                                return Ok(Self {
-                                    upstream_channel_state,
-                                });
-                            }
-                            Err(e) => {
-                                error!("Failed Noise handshake with {addr}: {e:?}. Retrying...");
-                            }
-                        }
+                // Attempt connection based on transport type
+                #[cfg(feature = "iroh")]
+                let connection_result = match &upstream_config.transport {
+                    config::UpstreamTransport::Tcp { address, port } => {
+                        Self::connect_tcp(address, *port, pubkey).await
+                    }
+                    config::UpstreamTransport::Iroh { node_id, alpn } => {
+                        Self::connect_iroh(iroh_endpoint, node_id, alpn, pubkey).await
+                    }
+                };
+
+                #[cfg(not(feature = "iroh"))]
+                let connection_result =
+                    Self::connect_tcp(&upstream_config.address, upstream_config.port, pubkey).await;
+
+                match connection_result {
+                    Ok((receiver, sender)) => {
+                        let upstream_channel_state = UpstreamChannelState::new(
+                            channel_manager_sender,
+                            channel_manager_receiver,
+                            receiver,
+                            sender,
+                        );
+                        info!(
+                            "Successfully established upstream connection {} via {}",
+                            index, transport_type
+                        );
+
+                        return Ok(Self {
+                            upstream_channel_state,
+                        });
                     }
                     Err(e) => {
                         error!(
-                            "Failed to connect to {addr}: {e}. Retry {attempt}/{RETRIES_PER_UPSTREAM}..."
+                            "Failed to connect to upstream {index} via {transport_type}: {e:?}. Retry {attempt}/{RETRIES_PER_UPSTREAM}..."
                         );
                     }
                 }
@@ -121,12 +157,70 @@ impl Upstream {
                 sleep(Duration::from_secs(5)).await;
             }
 
-            warn!("Exhausted retries for upstream {index} at {addr}");
+            warn!(
+                "Exhausted retries for upstream {index} via {transport_type}"
+            );
         }
 
         error!("Failed to connect to any configured upstream.");
         drop(shutdown_complete_tx);
         Err(TproxyError::Shutdown)
+    }
+
+    /// Establishes a TCP connection and performs Noise handshake.
+    async fn connect_tcp(
+        address: &str,
+        port: u16,
+        pubkey: &Secp256k1PublicKey,
+    ) -> Result<(Receiver<EitherFrame>, Sender<EitherFrame>), TproxyError> {
+        let addr: SocketAddr = format!("{}:{}", address, port)
+            .parse()
+            .map_err(|e| TproxyError::General(format!("Invalid address: {e}")))?;
+
+        debug!("Connecting to TCP upstream at {}", addr);
+        let socket = TcpStream::connect(addr).await?;
+
+        debug!("Performing Noise handshake with TCP upstream");
+        let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
+        let (receiver, sender) = Connection::new(socket, HandshakeRole::Initiator(initiator)).await?;
+
+        Ok((receiver, sender))
+    }
+
+    /// Establishes an Iroh connection and performs Noise handshake.
+    #[cfg(feature = "iroh")]
+    async fn connect_iroh(
+        iroh_endpoint: Option<&iroh::Endpoint>,
+        node_id: &str,
+        alpn: &str,
+        pubkey: &Secp256k1PublicKey,
+    ) -> Result<(Receiver<EitherFrame>, Sender<EitherFrame>), TproxyError> {
+        let endpoint = iroh_endpoint.ok_or(TproxyError::IrohNotInitialized)?;
+
+        // Parse NodeId
+        let node_id = node_id
+            .parse::<iroh::NodeId>()
+            .map_err(|e| TproxyError::InvalidNodeId(format!("{e:?}")))?;
+
+        debug!(
+            "Connecting to Iroh upstream NodeId {} with ALPN {}",
+            node_id, alpn
+        );
+
+        // Connect via Iroh
+        let connection = endpoint
+            .connect(node_id, alpn.as_bytes())
+            .await
+            .map_err(|e| TproxyError::IrohConnectionFailed(format!("{e:?}")))?;
+
+        debug!("Iroh connection established, performing Noise handshake");
+
+        // Perform Noise handshake over Iroh connection
+        let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
+        let (receiver, sender) =
+            Connection::new_iroh(connection, HandshakeRole::Initiator(initiator)).await?;
+
+        Ok((receiver, sender))
     }
 
     /// Starts the upstream connection and begins message processing.

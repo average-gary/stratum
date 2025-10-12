@@ -74,6 +74,15 @@ pub enum TproxyError {
     General(String),
     /// Error bubbling up from translator-core library
     TranslatorCore(stratum_translation::error::StratumTranslationError),
+    /// Iroh not initialized when trying to connect
+    #[cfg(feature = "iroh")]
+    IrohNotInitialized,
+    /// Iroh connection failed
+    #[cfg(feature = "iroh")]
+    IrohConnectionFailed(String),
+    /// Invalid NodeId format
+    #[cfg(feature = "iroh")]
+    InvalidNodeId(String),
 }
 
 impl std::error::Error for TproxyError {}
@@ -119,6 +128,12 @@ impl fmt::Display for TproxyError {
             NetworkHelpersError(ref e) => write!(f, "Network helpers error: {e:?}"),
             RolesSv2LogicError(ref e) => write!(f, "Roles logic error: {e:?}"),
             ParserError(ref e) => write!(f, "Roles logic parser error: {e:?}"),
+            #[cfg(feature = "iroh")]
+            IrohNotInitialized => write!(f, "Iroh endpoint not initialized"),
+            #[cfg(feature = "iroh")]
+            IrohConnectionFailed(ref e) => write!(f, "Iroh connection failed: {e}"),
+            #[cfg(feature = "iroh")]
+            InvalidNodeId(ref e) => write!(f, "Invalid NodeId: {e}"),
         }
     }
 }

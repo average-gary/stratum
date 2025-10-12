@@ -83,21 +83,37 @@ pub struct TranslatorConfig {
     pub iroh_config: Option<IrohConfig>,
 }
 
+/// Configuration for an upstream Pool connection.
+///
+/// Supports both traditional TCP connections and Iroh P2P connections (when the `iroh` feature is enabled).
 #[derive(Debug, Deserialize, Clone)]
 pub struct Upstream {
+    /// Transport configuration - either TCP or Iroh
+    #[cfg(feature = "iroh")]
+    #[serde(flatten)]
+    pub transport: UpstreamTransport,
+
+    /// For TCP-only builds, keep the simple fields
+    #[cfg(not(feature = "iroh"))]
     /// The address of the upstream server.
     pub address: String,
+    #[cfg(not(feature = "iroh"))]
     /// The port of the upstream server.
     pub port: u16,
+
     /// The Secp256k1 public key used to authenticate the upstream authority.
     pub authority_pubkey: Secp256k1PublicKey,
 }
 
 impl Upstream {
-    /// Creates a new `UpstreamConfig` instance.
+    /// Creates a new `Upstream` instance with TCP transport.
     pub fn new(address: String, port: u16, authority_pubkey: Secp256k1PublicKey) -> Self {
         Self {
+            #[cfg(feature = "iroh")]
+            transport: UpstreamTransport::Tcp { address, port },
+            #[cfg(not(feature = "iroh"))]
             address,
+            #[cfg(not(feature = "iroh"))]
             port,
             authority_pubkey,
         }
