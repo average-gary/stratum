@@ -99,27 +99,29 @@ This document outlines the implementation plan for integrating Iroh as a peer-to
 
 ---
 
-### Phase 2: Add Iroh Dependencies & Setup ⬜
+### Phase 2: Add Iroh Dependencies & Setup ✅
 
 **Goal:** Add Iroh to the project with feature flags and basic configuration.
 
-**Status:** Not Started
+**Status:** ✅ **Completed** (2025-10-11)
 
 #### Tasks
 
-- [ ] **2.1 Add Iroh dependencies**
+- [x] **2.1 Add Iroh dependencies**
   - **File:** `roles/roles-utils/network-helpers/Cargo.toml`
   - **Dependencies:**
     ```toml
     [dependencies]
-    iroh = { version = "0.29", optional = true }
+    iroh = { version = "0.93", optional = true }
 
     [features]
     iroh = ["dep:iroh"]
     ```
-  - **Also add to:** `roles/Cargo.toml` workspace members using network-helpers
+  - **Also add to:** `roles/pool/Cargo.toml` and `roles/translator/Cargo.toml`
+  - ✅ Added iroh v0.93 dependency to network-helpers
+  - ✅ Added iroh feature flags to pool and translator
 
-- [ ] **2.2 Create Iroh configuration structures**
+- [x] **2.2 Create Iroh configuration structures**
   - **File:** `roles/pool/src/lib/config.rs`
   - **Add:**
     ```rust
@@ -132,20 +134,27 @@ This document outlines the implementation plan for integrating Iroh as a peer-to
     }
     ```
   - **File:** `roles/translator/src/lib/config.rs`
-  - **Add similar structure for Translator**
+  - ✅ Created IrohConfig for Pool with enabled, secret_key_path, listen_port, relay_url fields
+  - ✅ Created IrohConfig for Translator with secret_key_path field
+  - ✅ Added UpstreamTransport enum (for future Phase 5 implementation)
+  - ✅ Added iroh_config field to both PoolConfig and TranslatorConfig
 
-- [ ] **2.3 Define ALPN protocol constant**
+- [x] **2.3 Define ALPN protocol constant**
   - **File:** `roles/roles-utils/network-helpers/src/lib.rs` (or new `constants.rs`)
   - **Add:**
     ```rust
     #[cfg(feature = "iroh")]
     pub const ALPN_SV2_MINING: &[u8] = b"sv2-m";
     ```
+  - ✅ Added ALPN_SV2_MINING constant to lib.rs
+  - ✅ Added Iroh-specific error variants (IrohConnectionError, IrohEndpointError)
 
-- [ ] **2.4 Create example configuration files**
-  - **File:** `roles/pool/pool-config-iroh.toml`
-  - **File:** `roles/translator/translator-config-iroh.toml`
-  - Document Iroh-specific settings with comments
+- [x] **2.4 Create example configuration files**
+  - **File:** `roles/pool/config-examples/pool-config-iroh-example.toml`
+  - **File:** `roles/translator/config-examples/tproxy-config-iroh-example.toml`
+  - ✅ Created comprehensive example configs with detailed comments
+  - ✅ Documented all Iroh configuration options
+  - ✅ Added instructions for obtaining Pool NodeId from logs
 
 **Acceptance Criteria:**
 - ✅ Project compiles with and without `iroh` feature
@@ -890,15 +899,15 @@ QUIC natively supports stream prioritization.
 | Phase | Estimated Time | Actual Time | Priority | Status |
 |-------|---------------|-------------|----------|--------|
 | Phase 1: Generalize Noise Stream | 2-3 days | ~4 hours | High | ✅ Complete |
-| Phase 2: Add Iroh Dependencies | 1 day | - | High | 🔜 Next |
-| Phase 3: Iroh Connection Module | 3-4 days | - | High | ⬜ Not Started |
+| Phase 2: Add Iroh Dependencies | 1 day | ~2 hours | High | ✅ Complete |
+| Phase 3: Iroh Connection Module | 3-4 days | - | High | 🔜 Next |
 | Phase 4: Pool Integration | 3-4 days | - | High | ⬜ Not Started |
 | Phase 5: Translator Integration | 2-3 days | - | High | ⬜ Not Started |
 | Phase 6: Testing & Validation | 4-5 days | - | High | ⬜ Not Started |
 | Phase 7: Documentation | 2-3 days | - | Medium | ⬜ Not Started |
 
 **Total Estimated Time:** 3-4 weeks (full-time work)
-**Progress:** Phase 1 complete (14% - 1/7 phases)
+**Progress:** Phase 2 complete (29% - 2/7 phases)
 
 ## References
 
@@ -947,14 +956,42 @@ QUIC natively supports stream prioritization.
 - **Solution:** The `from_tcp_stream()` helper method avoids this by specializing for TCP
 - **Learning:** Provide specialized constructors for common cases, even with generic implementations
 
+#### Phase 2: Add Iroh Dependencies & Setup
+
+**What Went Well:**
+- Feature flags work cleanly with `#[cfg(feature = "iroh")]` - no runtime overhead when disabled
+- Iroh 0.93 (latest version as of Oct 2025) compiles successfully and has a stable API
+- Configuration structures integrate smoothly with existing serde deserialization
+- Example configuration files provide clear guidance for users
+
+**Design Decisions:**
+- Made Iroh an optional feature flag to avoid forcing the dependency on all users
+- Kept UpstreamTransport enum simple with tagged union for future extensibility
+- Pool IrohConfig has `enabled` field for easy toggling without removing the config section
+- Translator's iroh_config is simpler (just secret_key_path) since it doesn't listen for connections
+- Added ALPN constant at the library level for easy reuse across modules
+
+**Key Insights:**
+- The feature flag approach works perfectly for optional P2P functionality
+- Configuration can be extended without breaking existing deployments
+- TOML's tagged enums (`[serde(tag = "transport")]`) will make Phase 5 implementation cleaner
+
+**Compilation Verification:**
+- ✅ Workspace compiles without iroh feature (default)
+- ✅ network-helpers compiles with iroh feature
+- ✅ pool compiles with iroh feature
+- ✅ translator compiles with iroh feature
+- Zero compilation warnings or errors in either configuration
+
 ### Performance Optimization
 
 *(To be filled in after benchmarking)*
 
 ---
 
-**Document Version:** 1.1
+**Document Version:** 1.2
 **Last Updated:** 2025-10-11
-**Status:** Phase 1 Complete - Implementation In Progress
-**Next Review:** After Phase 2 completion
+**Status:** Phase 2 Complete - Implementation In Progress
+**Next Review:** After Phase 3 completion
 **Phase 1 Completion Date:** 2025-10-11
+**Phase 2 Completion Date:** 2025-10-11

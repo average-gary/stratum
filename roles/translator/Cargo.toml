@@ -39,3 +39,7 @@ config_helpers_sv2 = { path = "../roles-utils/config-helpers" }
 [dev-dependencies]
 sha2 = "0.10.6"
 
+[features]
+# Enable Iroh P2P network transport support
+iroh = []
+

@@ -15,6 +15,44 @@ use std::path::{Path, PathBuf};
 use key_utils::Secp256k1PublicKey;
 use serde::Deserialize;
 
+#[cfg(feature = "iroh")]
+/// Configuration for Iroh P2P network transport.
+///
+/// Enables the Translator to connect to Pools using Iroh's NAT-traversal
+/// capabilities instead of direct TCP connections.
+///
+/// TODO(Phase 5): This configuration is read but not yet used to initialize an Iroh endpoint.
+/// Phase 5 will implement Iroh endpoint initialization in Translator main.rs.
+#[derive(Debug, Deserialize, Clone)]
+pub struct IrohConfig {
+    /// Path to store/load the Iroh secret key (ensures stable NodeId across restarts)
+    pub secret_key_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "iroh")]
+/// Upstream transport configuration - supports both TCP and Iroh connections.
+///
+/// TODO(Phase 5): This enum is defined but not yet used in Upstream::new().
+/// Phase 5 will implement the connection logic that switches based on transport type.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum UpstreamTransport {
+    /// Traditional TCP connection
+    Tcp {
+        /// The address of the upstream server
+        address: String,
+        /// The port of the upstream server
+        port: u16,
+    },
+    /// Iroh P2P connection
+    Iroh {
+        /// Base32-encoded NodeId of the Pool
+        node_id: String,
+        /// ALPN protocol identifier (typically "sv2-m" for mining)
+        alpn: String,
+    },
+}
+
 /// Configuration for the Translator.
 #[derive(Debug, Deserialize, Clone)]
 pub struct TranslatorConfig {
@@ -40,6 +78,9 @@ pub struct TranslatorConfig {
     pub aggregate_channels: bool,
     /// The path to the log file for the Translator.
     log_file: Option<PathBuf>,
+    #[cfg(feature = "iroh")]
+    /// Optional Iroh P2P network configuration
+    pub iroh_config: Option<IrohConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -89,6 +130,8 @@ impl TranslatorConfig {
             downstream_difficulty_config,
             aggregate_channels,
             log_file: None,
+            #[cfg(feature = "iroh")]
+            iroh_config: None,
         }
     }
 

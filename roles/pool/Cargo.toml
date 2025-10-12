@@ -36,3 +36,7 @@ clap = { version = "4.5.39", features = ["derive"] }
 [dev-dependencies]
 hex = "0.4.3"
 integration_tests_sv2 = { path = "../../test/integration-tests" }
+
+[features]
+# Enable Iroh P2P network transport support
+iroh = []

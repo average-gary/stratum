@@ -13,6 +13,29 @@ use std::path::{Path, PathBuf};
 use config_helpers_sv2::CoinbaseRewardScript;
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 
+#[cfg(feature = "iroh")]
+/// Configuration for Iroh P2P network transport.
+///
+/// Enables the Pool to accept connections from Translators using Iroh's NAT-traversal
+/// capabilities instead of direct TCP connections.
+///
+/// TODO(Phase 4): This configuration is read but not yet used to initialize an Iroh endpoint.
+/// Phase 4 will implement:
+/// - Iroh endpoint initialization in Pool main.rs
+/// - Protocol handler for accepting incoming Iroh connections
+/// - Secret key persistence and NodeId logging
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct IrohConfig {
+    /// Enable Iroh transport
+    pub enabled: bool,
+    /// Path to store/load the Iroh secret key (ensures stable NodeId across restarts)
+    pub secret_key_path: Option<PathBuf>,
+    /// Port to bind for Iroh endpoint (0 = random port)
+    pub listen_port: Option<u16>,
+    /// Custom relay server URL (None = use default Iroh relay)
+    pub relay_url: Option<String>,
+}
+
 /// Configuration for the Pool, including connection, authority, and coinbase settings.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct PoolConfig {
@@ -28,6 +51,8 @@ pub struct PoolConfig {
     share_batch_size: usize,
     log_file: Option<PathBuf>,
     server_id: u16,
+    #[cfg(feature = "iroh")]
+    iroh_config: Option<IrohConfig>,
 }
 
 impl PoolConfig {
@@ -58,6 +83,8 @@ impl PoolConfig {
             share_batch_size,
             log_file: None,
             server_id,
+            #[cfg(feature = "iroh")]
+            iroh_config: None,
         }
     }
 
@@ -135,6 +162,12 @@ impl PoolConfig {
     /// Returns the server id.
     pub fn server_id(&self) -> u16 {
         self.server_id
+    }
+
+    #[cfg(feature = "iroh")]
+    /// Returns the Iroh configuration.
+    pub fn iroh_config(&self) -> Option<&IrohConfig> {
+        self.iroh_config.as_ref()
     }
 }
 

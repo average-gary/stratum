@@ -1,0 +1,61 @@
+# SRI Pool config with Iroh P2P transport
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+cert_validity_sec = 3600
+
+# Traditional TCP listener (optional - can run TCP and Iroh simultaneously)
+listen_address = "0.0.0.0:34254"
+
+# Coinbase outputs are specified as descriptors. A full list of descriptors is available at
+#     https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki#appendix-b-index-of-script-expressions
+# Although the `musig` descriptor is not yet supported and the legacy `combo` descriptor never
+# will be. If you have an address, embed it in a descriptor like `addr(<address here>)`.
+coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+
+# Server Id (number to guarantee unique search space allocation across different Pool servers)
+server_id = 1
+
+# Pool signature (string to be included in coinbase tx)
+pool_signature = "Stratum V2 SRI Pool"
+
+# Template Provider config
+# Local TP (this is pointing to localhost so you must run a TP locally for this configuration to work)
+tp_address = "127.0.0.1:8442"
+shares_per_minute = 1.0
+share_batch_size = 10
+
+# Iroh P2P network configuration
+# TODO(Phase 4): Implement Iroh listener in Pool main.rs
+#   This configuration is defined but the Pool doesn't yet initialize an Iroh endpoint
+#   or accept incoming Iroh connections. Phase 4 will implement the listener logic.
+# This enables the Pool to accept connections from Translators using Iroh's NAT-traversal
+# capabilities, allowing connections even when the Pool is behind NAT/firewall.
+[iroh_config]
+# Enable Iroh transport (currently has no effect until Phase 4 is implemented)
+enabled = true
+
+# Path to store/load the Iroh secret key
+# This ensures the Pool has a stable NodeId across restarts.
+# The NodeId is derived from this secret key and is what Translators use to connect.
+# If the file doesn't exist, it will be created on first run.
+secret_key_path = "./pool-iroh-secret.key"
+
+# Port to bind for Iroh endpoint (optional)
+# Set to 0 (or omit) to let the system choose a random available port.
+# Only needed if you want to configure port forwarding or firewall rules.
+listen_port = 34255
+
+# Custom relay server URL (optional)
+# If omitted, uses the default public Iroh relay network.
+# For production deployments, you may want to run your own relay server.
+# relay_url = "https://relay.iroh.network"
+
+# Enable this option to set a predefined log file path.
+# When enabled, logs will always be written to this file.
+# The CLI option --log-file (or -f) will override this setting if provided.
+# log_file = "./pool.log"
+
+# TODO(Phase 4): After Phase 4 implementation is complete, starting the Pool with
+#   Iroh enabled will print the NodeId to the logs. Check for a line like:
+#   "Pool Iroh NodeId: 6jfhwvskg5txs7jckzs7slqpfm3gqjr45kf7ry65vg7kqi5z7q3q"
+# This NodeId is what Translators need to connect to this Pool via Iroh.
