@@ -75,6 +75,9 @@ pub mod setup_connection;
 use setup_connection::SetupConnectionHandler;
 
 pub mod message_handler;
+
+#[cfg(feature = "iroh")]
+pub mod iroh_handler;
 /// Represents a generic SV2 message with a static lifetime.
 pub type Message = AnyMessage<'static>;
 /// A standard SV2 frame containing a message.
@@ -91,7 +94,7 @@ pub type EitherFrame = StandardEitherFrame<Message>;
 #[derive(Debug)]
 pub struct Downstream {
     // The unique identifier for this downstream connection's channel or group.
-    id: u32,
+    pub(crate) id: u32,
     // Channel receiver for incoming SV2 frames from the network connection task.
     receiver: Receiver<EitherFrame>,
     // Channel sender for outgoing SV2 frames to the network connection task.
@@ -137,10 +140,10 @@ pub struct Downstream {
 pub struct Pool {
     // A map storing all active downstream connections.
     // Keyed by the downstream's channel/group ID (`u32`).
-    downstreams: HashMap<u32, Arc<Mutex<Downstream>>, BuildNoHashHasher<u32>>,
+    pub(crate) downstreams: HashMap<u32, Arc<Mutex<Downstream>>, BuildNoHashHasher<u32>>,
     // Sender channel to forward solutions received from any downstream connection
     // to the upstream Template Provider connection task.
-    solution_sender: Sender<SubmitSolution<'static>>,
+    pub(crate) solution_sender: Sender<SubmitSolution<'static>>,
     // Flag indicating whether at least one `NewTemplate` has been received and processed.
     // Might be used to ensure initial jobs are sent before accepting solutions??.
     new_template_processed: bool,

@@ -7,6 +7,8 @@
 //! - Monitors Pool status and handles shutdowns.
 pub mod config;
 pub mod error;
+#[cfg(feature = "iroh")]
+pub mod iroh_helpers;
 pub mod mining_pool;
 pub mod status;
 pub mod template_receiver;
@@ -127,11 +129,59 @@ impl PoolSv2 {
             r_prev_hash,
             s_solution,
             s_message_recv_signal,
-            status::Sender::DownstreamListener(status_tx),
+            status::Sender::DownstreamListener(status_tx.clone()),
             config.shares_per_minute(),
             recv_stop_signal,
         )
         .await?;
+
+        // --- Initialize Iroh Endpoint (if enabled) ---
+        #[cfg(feature = "iroh")]
+        let iroh_router = if let Some(iroh_config) = config.iroh_config() {
+            if iroh_config.enabled {
+                info!("Iroh transport is enabled, initializing endpoint");
+
+                match iroh_helpers::init_iroh_endpoint(iroh_config).await {
+                    Ok(endpoint) => {
+                        info!("Iroh endpoint initialized successfully");
+
+                        // Create protocol handler
+                        let protocol_handler = mining_pool::iroh_handler::Sv2MiningProtocolHandler::new(
+                            config.authority_secret_key().clone(),
+                            config.cert_validity_sec(),
+                            pool.clone(),
+                            status::Sender::DownstreamListener(status_tx.clone()),
+                            config.shares_per_minute(),
+                            config.coinbase_reward_script().clone(),
+                        );
+
+                        // Set up router with ALPN handler
+                        let router = iroh::protocol::Router::builder(endpoint)
+                            .accept(
+                                stratum_common::network_helpers_sv2::ALPN_SV2_MINING,
+                                Arc::new(protocol_handler),
+                            )
+                            .spawn();
+
+                        info!(
+                            "Pool listening for Iroh connections on ALPN: {}",
+                            String::from_utf8_lossy(stratum_common::network_helpers_sv2::ALPN_SV2_MINING)
+                        );
+
+                        Some(router)
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize Iroh endpoint: {:?}", e);
+                        return Err(e);
+                    }
+                }
+            } else {
+                info!("Iroh transport is disabled in configuration");
+                None
+            }
+        } else {
+            None
+        };
         // Monitor the status of Template Receiver and downstream connections.
         // Start the error handling loop
         // See `./status.rs` and `utils/error_handling` for information on how this operates
@@ -190,6 +240,22 @@ impl PoolSv2 {
                     }
                 }
             }
+
+            // Shutdown sequence after breaking out of the loop
+            info!("Starting Pool shutdown sequence");
+
+            // Shutdown Iroh router if it was initialized
+            #[cfg(feature = "iroh")]
+            if let Some(router) = iroh_router {
+                info!("Shutting down Iroh router");
+                if let Err(e) = router.shutdown().await {
+                    error!("Error shutting down Iroh router: {:?}", e);
+                } else {
+                    info!("Iroh router shut down successfully");
+                }
+            }
+
+            info!("Pool shutdown sequence complete");
         });
         Ok(())
     }
