@@ -3,9 +3,8 @@ pub mod noise_stream;
 pub mod plain_connection;
 #[cfg(feature = "sv1")]
 pub mod sv1_connection;
-// TODO(Phase 3): Add iroh_connection module
-// #[cfg(feature = "iroh")]
-// pub mod iroh_connection;
+#[cfg(feature = "iroh")]
+pub mod iroh_connection;
 
 use async_channel::{RecvError, SendError};
 use codec_sv2::Error as CodecError;
