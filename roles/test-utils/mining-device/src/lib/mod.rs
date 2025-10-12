@@ -175,16 +175,18 @@ pub async fn connect_iroh(
         }
     };
 
-    // Build Iroh endpoint
+    // Build Iroh endpoint with discovery
     let endpoint = match iroh::Endpoint::builder()
         .secret_key(secret_key)
         .relay_mode(iroh::RelayMode::Default)
+        .discovery_n0()  // Enables DNS + Pkarr discovery via n0.computer
         .bind()
         .await
     {
         Ok(ep) => {
             let node_id = ep.node_id();
             info!("Mining device Iroh endpoint initialized. NodeId: {}", node_id);
+            info!("Enabled Iroh discovery: n0.computer DNS + Pkarr");
             ep
         }
         Err(e) => {

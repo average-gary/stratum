@@ -1,0 +1,34 @@
+# Test Pool config with Iroh P2P transport enabled
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+cert_validity_sec = 3600
+
+# Traditional TCP listener (optional - can run TCP and Iroh simultaneously)
+listen_address = "0.0.0.0:34254"
+
+# Coinbase outputs
+coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+
+# Server Id
+server_id = 1
+
+# Pool signature
+pool_signature = "Stratum V2 SRI Pool"
+
+# Template Provider config
+tp_address = "127.0.0.1:48336"
+shares_per_minute = 1.0
+share_batch_size = 10
+
+# Iroh P2P network configuration
+[iroh_config]
+enabled = true
+
+# Path to store/load the Iroh secret key for stable NodeId
+secret_key_path = "./pool-iroh-secret.key"
+
+# Port to bind for Iroh endpoint (optional, 0 = random)
+listen_port = 0
+
+# Use default public Iroh relay
+# relay_url = "https://relay.iroh.network"

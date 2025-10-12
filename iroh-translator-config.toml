@@ -1,0 +1,35 @@
+# Translator Configuration for Testing with Iroh P2P Transport
+
+# Local Mining Device Downstream Connection (SV1)
+downstream_address = "0.0.0.0"
+downstream_port = 34255
+
+# Version support
+max_supported_version = 2
+min_supported_version = 2
+
+# Extranonce2 size for downstream connections
+downstream_extranonce2_size = 4
+
+# User identity for pool connection
+user_identity = "iroh_test_translator"
+
+# Aggregate channels: all miners share one upstream channel
+aggregate_channels = true
+
+# Difficulty params
+[downstream_difficulty_config]
+min_individual_miner_hashrate = 10_000_000_000_000.0
+shares_per_minute = 6.0
+enable_vardiff = true
+
+# Iroh P2P network configuration
+[iroh_config]
+secret_key_path = "./translator-iroh-secret.key"
+
+# Upstream Pool Connection via Iroh
+[[upstreams]]
+transport = "iroh"
+node_id = "bc8e90b806d2379ae371c3382cd32e95a7d1a1283ce910674145d4e11f0822af"  # Pool's NodeId from previous test
+alpn = "sv2-m"
+authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"

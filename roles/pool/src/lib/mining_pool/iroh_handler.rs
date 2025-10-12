@@ -40,7 +40,7 @@
 #[cfg(feature = "iroh")]
 use crate::{
     error::{PoolError, PoolResult},
-    mining_pool::{setup_connection::SetupConnectionHandler, Downstream},
+    mining_pool::Downstream,
     status,
 };
 #[cfg(feature = "iroh")]
@@ -195,7 +195,7 @@ impl Sv2MiningProtocolHandler {
         // Perform Noise handshake over Iroh connection
         // This uses the ConnectionIrohExt trait to create a Noise connection
         use stratum_common::network_helpers_sv2::noise_connection::Connection as NoiseConnection;
-        let (mut receiver, mut sender) =
+        let (receiver, sender) =
             match NoiseConnection::new_iroh::<crate::mining_pool::Message>(connection, HandshakeRole::Responder(responder))
                 .await
             {
@@ -214,35 +214,9 @@ impl Sv2MiningProtocolHandler {
 
         info!("Noise handshake completed with {:?}", remote_node_id);
 
-        // Perform SV2 SetupConnection handshake
-        let setup_connection = Arc::new(Mutex::new(SetupConnectionHandler::new()));
-
         // For Iroh connections, we use a synthetic SocketAddr since Iroh uses NodeId-based addressing
         // We'll use a placeholder address (127.0.0.1:0) since the real identifier is the NodeId
         let address = "127.0.0.1:0".parse().unwrap();
-
-        let (requires_standard_jobs, requires_custom_work) = match SetupConnectionHandler::setup(
-            setup_connection,
-            &mut receiver,
-            &mut sender,
-            address,
-        )
-        .await
-        {
-            Ok(setup) => setup,
-            Err(e) => {
-                error!(
-                    "SV2 SetupConnection failed with {}: {:?}",
-                    remote_node_id, e
-                );
-                return Err(e);
-            }
-        };
-
-        info!(
-            "SV2 SetupConnection completed with {} - requires_standard_jobs: {}, requires_custom_work: {}",
-            remote_node_id, requires_standard_jobs, requires_custom_work
-        );
 
         // Get solution sender from pool
         let solution_sender = self

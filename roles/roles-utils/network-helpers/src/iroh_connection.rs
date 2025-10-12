@@ -146,13 +146,27 @@ impl ConnectionIrohExt for crate::noise_connection::Connection {
     where
         Message: Serialize + Deserialize<'static> + GetSize + Send + 'static,
     {
-        // Open a bidirectional stream over the Iroh connection
-        let (send_stream, recv_stream) = connection
-            .open_bi()
-            .await
-            .map_err(|e| Error::IrohConnectionError(format!("Failed to open bi stream: {}", e)))?;
-
-        debug!("Opened bidirectional stream over Iroh connection");
+        // Initiator opens a new stream, Responder accepts an incoming stream
+        let (send_stream, recv_stream) = match role {
+            HandshakeRole::Initiator(_) => {
+                // Initiator opens a new bidirectional stream
+                let (send, recv) = connection
+                    .open_bi()
+                    .await
+                    .map_err(|e| Error::IrohConnectionError(format!("Failed to open bi stream: {}", e)))?;
+                debug!("Initiator: Opened bidirectional stream over Iroh connection");
+                (send, recv)
+            }
+            HandshakeRole::Responder(_) => {
+                // Responder accepts an incoming bidirectional stream
+                let (send, recv) = connection
+                    .accept_bi()
+                    .await
+                    .map_err(|e| Error::IrohConnectionError(format!("Failed to accept bi stream: {}", e)))?;
+                debug!("Responder: Accepted bidirectional stream over Iroh connection");
+                (send, recv)
+            }
+        };
 
         // Create async channels for message passing
         let (sender_incoming, receiver_incoming) = unbounded();

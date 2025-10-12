@@ -34,7 +34,7 @@ sha2 = { version = "0.10.6", features = ["compress", "asm"] }
 tokio = "1.44.1"
 primitive-types = "0.13.1"
 num-format = "0.4"
-iroh = { version = "0.93", optional = true }
+iroh = { version = "0.93", optional = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 
 [features]
 # Enable Iroh P2P network transport support

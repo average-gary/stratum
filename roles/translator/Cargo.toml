@@ -34,7 +34,7 @@ v1 = { path = "../../protocols/v1", package="sv1_api" }
 key-utils = { path = "../../utils/key-utils" }
 clap = { version = "4.5.39", features = ["derive"] }
 config_helpers_sv2 = { path = "../roles-utils/config-helpers" }
-iroh = { version = "0.93", optional = true }
+iroh = { version = "0.93", optional = true, features = ["discovery-local-network", "discovery-pkarr-dht"] }
 rand = { version = "0.8.4", optional = true }
 
 

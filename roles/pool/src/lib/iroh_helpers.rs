@@ -115,8 +115,14 @@ pub async fn init_iroh_endpoint(config: &IrohConfig) -> Result<iroh::Endpoint, P
     // Load or generate secret key
     let secret_key = load_or_generate_secret_key(&config.secret_key_path)?;
 
-    // Build endpoint
-    let mut builder = iroh::Endpoint::builder().secret_key(secret_key);
+    // Build endpoint with discovery for robust peer discovery
+    // Using `.discovery_n0()` which enables n0.computer's DNS-based discovery service
+    // This allows peers to find each other using just NodeId via the public DNS infrastructure
+    let mut builder = iroh::Endpoint::builder()
+        .secret_key(secret_key)
+        .discovery_n0();  // Enables DNS + Pkarr discovery via n0.computer
+
+    info!("Enabled Iroh discovery: n0.computer DNS + Pkarr");
 
     // Set relay mode
     // TODO: Support custom relay URL when config.relay_url is Some

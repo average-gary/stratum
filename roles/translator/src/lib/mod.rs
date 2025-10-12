@@ -288,10 +288,11 @@ impl TranslatorSv2 {
             Self::load_or_generate_secret_key(None).await?
         };
 
-        // Build endpoint
+        // Build endpoint with discovery
         let endpoint = iroh::Endpoint::builder()
             .secret_key(secret_key)
             .relay_mode(iroh::RelayMode::Default)
+            .discovery_n0()  // Enables DNS + Pkarr discovery via n0.computer
             .bind()
             .await
             .map_err(|e| {
@@ -300,6 +301,7 @@ impl TranslatorSv2 {
 
         let node_id = endpoint.node_id();
         info!("Translator Iroh endpoint initialized. NodeId: {}", node_id);
+        info!("Enabled Iroh discovery: n0.computer DNS + Pkarr");
 
         Ok(endpoint)
     }
