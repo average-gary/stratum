@@ -34,6 +34,11 @@ sha2 = { version = "0.10.6", features = ["compress", "asm"] }
 tokio = "1.44.1"
 primitive-types = "0.13.1"
 num-format = "0.4"
+iroh = { version = "0.93", optional = true }
+
+[features]
+# Enable Iroh P2P network transport support
+iroh = ["dep:iroh", "stratum-common/iroh"]
 
 [dev-dependencies]
 # Criterion 0.5 without default features; combined with a dev pin of `half = 2.3.1` to stay Rust 1.75-compatible.

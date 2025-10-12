@@ -3172,6 +3172,7 @@ dependencies = [
  "criterion",
  "futures",
  "half",
+ "iroh",
  "key-utils",
  "num-format",
  "num_cpus",

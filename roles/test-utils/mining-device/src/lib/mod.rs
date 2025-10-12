@@ -34,6 +34,9 @@ use stratum_common::{
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
+#[cfg(feature = "iroh")]
+use stratum_common::network_helpers_sv2::iroh_connection::ConnectionIrohExt;
+
 // Fast SHA256d midstate hasher
 use sha2::{
     compress256,
@@ -146,6 +149,182 @@ pub async fn connect(
         single_submit,
     )
     .await
+}
+
+/// Connects to the Pool via Iroh P2P transport.
+#[cfg(feature = "iroh")]
+pub async fn connect_iroh(
+    pool_node_id: String,
+    alpn: String,
+    secret_key_path: Option<std::path::PathBuf>,
+    pub_key: Option<Secp256k1PublicKey>,
+    device_id: Option<String>,
+    user_id: Option<String>,
+    handicap: u32,
+    nominal_hashrate_multiplier: Option<f32>,
+    single_submit: bool,
+) {
+    info!("Initializing Iroh endpoint for mining device");
+
+    // Load or generate secret key
+    let secret_key = match load_or_generate_iroh_secret_key(secret_key_path).await {
+        Ok(key) => key,
+        Err(e) => {
+            error!("Failed to initialize Iroh secret key: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Build Iroh endpoint
+    let endpoint = match iroh::Endpoint::builder()
+        .secret_key(secret_key)
+        .relay_mode(iroh::RelayMode::Default)
+        .bind()
+        .await
+    {
+        Ok(ep) => {
+            let node_id = ep.node_id();
+            info!("Mining device Iroh endpoint initialized. NodeId: {}", node_id);
+            ep
+        }
+        Err(e) => {
+            error!("Failed to bind Iroh endpoint: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Parse Pool NodeId
+    let pool_node_id = match pool_node_id.parse::<iroh::NodeId>() {
+        Ok(id) => id,
+        Err(e) => {
+            error!("Invalid Pool NodeId format: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    info!(
+        "Connecting to Pool via Iroh: NodeId={}, ALPN={}",
+        pool_node_id, alpn
+    );
+
+    // Connect to Pool via Iroh
+    let connection = loop {
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            endpoint.connect(pool_node_id, alpn.as_bytes()),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => break conn,
+            Ok(Err(e)) => {
+                error!(
+                    "Failed to connect to Pool via Iroh: {}, retrying in 5s",
+                    e
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            Err(_) => {
+                error!("Pool is unresponsive (Iroh connection timeout), terminating");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    info!("Pool Iroh connection established");
+
+    // Perform Noise handshake over Iroh
+    let initiator = Initiator::new(pub_key.map(|e| e.0));
+    let (receiver, sender) = match Connection::new_iroh(
+        connection,
+        codec_sv2::HandshakeRole::Initiator(initiator),
+    )
+    .await
+    {
+        Ok(channels) => channels,
+        Err(e) => {
+            error!("Failed to perform Noise handshake over Iroh: {:?}", e);
+            std::process::exit(1);
+        }
+    };
+
+    info!("Pool Noise handshake completed over Iroh");
+
+    // Use a dummy address since we're not using TCP
+    let dummy_address: SocketAddr = "0.0.0.0:0".parse().unwrap();
+
+    Device::start(
+        receiver,
+        sender,
+        dummy_address,
+        device_id,
+        user_id,
+        handicap,
+        nominal_hashrate_multiplier,
+        single_submit,
+    )
+    .await
+}
+
+/// Loads or generates an Iroh secret key.
+#[cfg(feature = "iroh")]
+async fn load_or_generate_iroh_secret_key(
+    secret_key_path: Option<std::path::PathBuf>,
+) -> Result<iroh::SecretKey, String> {
+    use tokio::fs;
+
+    if let Some(path) = secret_key_path {
+        // Try to load existing key
+        if path.exists() {
+            info!("Loading Iroh secret key from {:?}", path);
+            let key_bytes = fs::read(&path)
+                .await
+                .map_err(|e| format!("Failed to read secret key: {}", e))?;
+
+            if key_bytes.len() != 32 {
+                return Err(format!(
+                    "Invalid secret key length: expected 32 bytes, got {}",
+                    key_bytes.len()
+                ));
+            }
+
+            let mut key_array = [0u8; 32];
+            key_array.copy_from_slice(&key_bytes);
+            let secret_key = iroh::SecretKey::from_bytes(&key_array);
+            info!("Loaded existing Iroh secret key from {:?}", path);
+            Ok(secret_key)
+        } else {
+            // Generate new key and save it
+            info!("Generating new Iroh secret key and saving to {:?}", path);
+            let mut key_bytes = [0u8; 32];
+            use rand::RngCore;
+            rand::thread_rng().fill_bytes(&mut key_bytes);
+            let secret_key = iroh::SecretKey::from_bytes(&key_bytes);
+
+            // Create parent directories if they don't exist
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("Failed to create parent directories: {}", e))?;
+            }
+
+            // Write key to file
+            fs::write(&path, secret_key.to_bytes())
+                .await
+                .map_err(|e| format!("Failed to write secret key: {}", e))?;
+
+            info!("Generated and saved new Iroh secret key to {:?}", path);
+            Ok(secret_key)
+        }
+    } else {
+        // No path provided - use ephemeral key
+        info!("No secret key path provided, using ephemeral Iroh secret key");
+        let mut key_bytes = [0u8; 32];
+        use rand::RngCore;
+        rand::thread_rng().fill_bytes(&mut key_bytes);
+        let secret_key = iroh::SecretKey::from_bytes(&key_bytes);
+        info!("Using ephemeral Iroh secret key (NodeId will change on restart)");
+        Ok(secret_key)
+    }
 }
 
 pub type Message = MiningDeviceMessages<'static>;
