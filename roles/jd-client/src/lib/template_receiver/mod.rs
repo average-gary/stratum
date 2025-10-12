@@ -120,7 +120,7 @@ impl TemplateReceiver {
                         "TCP connection established, starting Noise handshake"
                     );
 
-                    match NoiseTcpStream::<Message>::new(
+                    match NoiseTcpStream::<Message>::from_tcp_stream(
                         stream,
                         HandshakeRole::Initiator(initiator),
                     )

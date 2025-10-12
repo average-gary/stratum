@@ -80,7 +80,7 @@ impl JobDeclarator {
         info!("Connection established with JD Server at {addr} in mode: {mode:?}");
         let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
         let (noise_stream_reader, noise_stream_writer) =
-            NoiseTcpStream::<Message>::new(stream, HandshakeRole::Initiator(initiator))
+            NoiseTcpStream::<Message>::from_tcp_stream(stream, HandshakeRole::Initiator(initiator))
                 .await?
                 .into_split();
 

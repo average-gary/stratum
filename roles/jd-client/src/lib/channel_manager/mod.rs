@@ -388,7 +388,7 @@ impl ChannelManager {
                                         continue;
                                     }
                                 };
-                                let noise_stream = match NoiseTcpStream::<Message>::new(
+                                let noise_stream = match NoiseTcpStream::<Message>::from_tcp_stream(
                                     stream,
                                     stratum_common::roles_logic_sv2::codec_sv2::HandshakeRole::Responder(responder),
                                 )

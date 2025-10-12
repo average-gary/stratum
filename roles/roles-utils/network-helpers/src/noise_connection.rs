@@ -54,7 +54,7 @@ impl Connection {
             receiver_outgoing,
         });
 
-        let (read_half, write_half) = NoiseTcpStream::<Message>::new(stream, role)
+        let (read_half, write_half) = NoiseTcpStream::<Message>::from_tcp_stream(stream, role)
             .await?
             .into_split();
 

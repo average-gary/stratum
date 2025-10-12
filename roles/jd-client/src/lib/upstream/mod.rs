@@ -89,7 +89,7 @@ impl Upstream {
         let initiator = Initiator::from_raw_k(pubkey.into_bytes())?;
         debug!("Begin with noise setup in upstream connection");
         let (noise_stream_reader, noise_stream_writer) =
-            NoiseTcpStream::<Message>::new(stream, HandshakeRole::Initiator(initiator))
+            NoiseTcpStream::<Message>::from_tcp_stream(stream, HandshakeRole::Initiator(initiator))
                 .await?
                 .into_split();
 
