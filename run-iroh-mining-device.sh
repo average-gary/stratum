@@ -27,5 +27,5 @@ cargo run --manifest-path=roles/test-utils/mining-device/Cargo.toml --features i
     --pool-iroh-node-id "$POOL_NODE_ID" \
     --pool-iroh-alpn "sv2-m" \
     --iroh-secret-key-path ./mining-device-iroh-secret.key \
-    --pubkey-pool 9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan \
+    --pubkey-pool 9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72 \
     --handicap 1000
