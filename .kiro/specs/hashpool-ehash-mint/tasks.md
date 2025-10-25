@@ -1,0 +1,533 @@
+# Implementation Tasks - eHash Persistence
+
+This document breaks down the eHash persistence implementation into small, focused tasks that can be implemented as minimal commits. Each task is designed to be independently reviewable and testable.
+
+## Phase 1: Foundation - Shared Module Setup
+
+### 1.1 Create common/ehash crate scaffold
+- [ ] Create `common/ehash/Cargo.toml` with basic dependencies
+- [ ] Create `common/ehash/src/lib.rs` with module structure
+- [ ] Add ehash crate to workspace `Cargo.toml`
+- **Requirements**: 1.1, 4.1
+- **Files**: `common/ehash/Cargo.toml`, `common/ehash/src/lib.rs`, `Cargo.toml`
+
+### 1.2 Add CDK dependencies
+- [ ] Add CDK mint and wallet dependencies to `common/ehash/Cargo.toml`
+- [ ] Add CDK re-exports to `common/ehash/src/lib.rs`
+- [ ] Verify CDK compiles with required features
+- **Requirements**: 4.1, 4.2
+- **Files**: `common/ehash/Cargo.toml`
+
+### 1.3 Add hashpool ehash protocol dependencies
+- [ ] Add ehash protocol dependency from `deps/hashpool/protocols/ehash`
+- [ ] Re-export core hashpool functions (`calculate_ehash_amount`, `calculate_difficulty`)
+- [ ] Add basic documentation for hashpool integration
+- **Requirements**: 1.1, 1.3
+- **Files**: `common/ehash/Cargo.toml`, `common/ehash/src/lib.rs`
+
+## Phase 2: Core Data Structures
+
+### 2.1 Define EHashMintData structure
+- [ ] Create `common/ehash/src/types.rs` with `EHashMintData` struct
+- [ ] Add all required fields (share_hash, channel_id, user_identity, target, sequence_number, etc.)
+- [ ] Implement Clone and Debug traits
+- **Requirements**: 1.2, 3.1
+- **Files**: `common/ehash/src/types.rs`
+
+### 2.2 Add EHashMintData helper methods
+- [ ] Implement `calculate_ehash_amount(&self, min_leading_zeros: u32) -> Amount`
+- [ ] Add conversion from share hash bytes to hashpool format
+- [ ] Add timestamp and block_found accessors
+- **Requirements**: 1.3, 3.2
+- **Files**: `common/ehash/src/types.rs`
+
+### 2.3 Define WalletCorrelationData structure
+- [ ] Add `WalletCorrelationData` struct to `types.rs`
+- [ ] Include channel_id, sequence_number, user_identity, ehash_tokens_minted
+- [ ] Implement Clone and Debug traits
+- **Requirements**: 3.4
+- **Files**: `common/ehash/src/types.rs`
+
+### 2.4 Define configuration structures
+- [ ] Create `common/ehash/src/config.rs` with `MintConfig` struct
+- [ ] Add `WalletConfig` struct with locking_pubkey support
+- [ ] Add `JdcEHashConfig` with mode enum (Mint/Wallet)
+- **Requirements**: 5.1, 5.2, 5.3
+- **Files**: `common/ehash/src/config.rs`
+
+### 2.5 Define error types
+- [ ] Create `common/ehash/src/error.rs` with `MintError` enum
+- [ ] Add `WalletError` enum
+- [ ] Implement Display and Error traits
+- **Requirements**: 4.2, 6.4
+- **Files**: `common/ehash/src/error.rs`
+
+### 2.6 Add unit tests for data structures
+- [ ] Test EHashMintData creation and eHash calculation
+- [ ] Test WalletCorrelationData creation
+- [ ] Test configuration deserialization from TOML
+- **Requirements**: 1.3, 3.2
+- **Files**: `common/ehash/src/types.rs`, `common/ehash/src/config.rs`
+
+## Phase 3: MintHandler Implementation
+
+### 3.1 Create MintHandler structure scaffold
+- [ ] Create `common/ehash/src/mint.rs` with `MintHandler` struct
+- [ ] Add async channel fields (receiver, sender)
+- [ ] Add CDK Mint instance field
+- [ ] Add basic constructor `new(config, status_tx)`
+- **Requirements**: 1.1, 1.5, 7.1
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.2 Implement MintHandler initialization
+- [ ] Initialize CDK Mint with database backend
+- [ ] Configure "HASH" currency unit
+- [ ] Set up async channels for EHashMintData
+- [ ] Add get_sender() and get_receiver() methods
+- **Requirements**: 4.1, 4.3
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.3 Add mint processing core logic
+- [ ] Implement `process_mint_data(&mut self, data: EHashMintData)`
+- [ ] Create MintQuote in PAID state using CDK
+- [ ] Calculate eHash amount from share hash
+- [ ] Return minted token proofs
+- **Requirements**: 1.2, 1.3
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.4 Implement P2PK token locking
+- [ ] Add `register_channel_pubkey(channel_id, pubkey)` method
+- [ ] Create SpendingConditions with P2PK locking
+- [ ] Mint tokens with P2PK conditions using CDK
+- **Requirements**: 8.1, 8.2
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.5 Add block found event handling
+- [ ] Implement `handle_block_found(&mut self, data: &EHashMintData)`
+- [ ] Trigger keyset lifecycle transition
+- [ ] Query Template Provider for block reward (stub for now)
+- **Requirements**: 9.1, 9.2
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.6 Implement MintHandler run loop
+- [ ] Add `run(&mut self)` method with async channel receiver loop
+- [ ] Process incoming EHashMintData events
+- [ ] Call process_mint_data for each event
+- **Requirements**: 1.2, 3.3
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.7 Add fault tolerance - retry queue
+- [ ] Add retry_queue field to MintHandler
+- [ ] Add failure_count and last_failure tracking
+- [ ] Implement `process_mint_data_with_retry` wrapper
+- **Requirements**: 6.1, 6.3
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.8 Add fault tolerance - exponential backoff
+- [ ] Add backoff_multiplier and max_retries config
+- [ ] Implement `attempt_recovery()` method
+- [ ] Calculate exponential backoff duration
+- **Requirements**: 6.1, 6.5
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.9 Add graceful shutdown support
+- [ ] Implement `run_with_shutdown(shutdown_rx)` method
+- [ ] Add tokio::select! for shutdown signal handling
+- [ ] Implement `shutdown()` to complete pending operations
+- **Requirements**: 6.1, 6.5
+- **Files**: `common/ehash/src/mint.rs`
+
+### 3.10 Add MintHandler unit tests
+- [ ] Test CDK initialization and configuration
+- [ ] Test P2PK token creation
+- [ ] Test retry queue and backoff logic
+- [ ] Test graceful shutdown
+- **Requirements**: 1.5, 6.1
+- **Files**: `common/ehash/src/mint.rs`
+
+## Phase 4: WalletHandler Implementation
+
+### 4.1 Create WalletHandler structure scaffold
+- [ ] Create `common/ehash/src/wallet.rs` with `WalletHandler` struct
+- [ ] Add async channel fields for WalletCorrelationData
+- [ ] Add optional CDK Wallet instance field
+- [ ] Add locking_pubkey and user_identity fields
+- **Requirements**: 7.5, 7.6
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.2 Implement WalletHandler initialization
+- [ ] Add constructor `new(config, status_tx)`
+- [ ] Initialize optional CDK Wallet for "HASH" unit
+- [ ] Configure locking pubkey from config
+- [ ] Set up async channels
+- **Requirements**: 8.1
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.3 Add correlation processing logic
+- [ ] Implement `process_correlation_data(&mut self, data: WalletCorrelationData)`
+- [ ] Track ehash_tokens_minted counter
+- [ ] Log correlation events (no wallet ops yet)
+- **Requirements**: 3.4
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.4 Add P2PK token query support
+- [ ] Implement `query_p2pk_tokens() -> Vec<Proof>`
+- [ ] Query CDK Wallet for P2PK-locked tokens by pubkey
+- [ ] Filter tokens by locking pubkey
+- **Requirements**: 8.2, 8.3
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.5 Implement WalletHandler run loop
+- [ ] Add `run(&mut self)` method with async channel receiver loop
+- [ ] Process incoming WalletCorrelationData events
+- [ ] Call process_correlation_data for each event
+- **Requirements**: 3.4
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.6 Add fault tolerance - retry queue
+- [ ] Add retry_queue field to WalletHandler
+- [ ] Add failure tracking fields
+- [ ] Implement `process_correlation_data_with_retry` wrapper
+- **Requirements**: 6.2, 6.3
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.7 Add fault tolerance - recovery logic
+- [ ] Add recovery_enabled config option
+- [ ] Implement `attempt_recovery()` method
+- [ ] Process retry queue with backoff
+- **Requirements**: 6.2, 6.5
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.8 Add graceful shutdown support
+- [ ] Implement `run_with_shutdown(shutdown_rx)` method
+- [ ] Add tokio::select! for shutdown signal handling
+- [ ] Implement `shutdown()` to complete pending operations
+- **Requirements**: 6.2, 6.5
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.9 Add pubkey accessors
+- [ ] Implement `get_locking_pubkey() -> PublicKey`
+- [ ] Implement `get_user_identity() -> &str`
+- [ ] Add bech32 encoding/decoding helpers (stub for now)
+- **Requirements**: 2.4, 8.1
+- **Files**: `common/ehash/src/wallet.rs`
+
+### 4.10 Add WalletHandler unit tests
+- [ ] Test wallet initialization and configuration
+- [ ] Test correlation data processing
+- [ ] Test retry queue and recovery logic
+- [ ] Test graceful shutdown
+- **Requirements**: 8.1, 8.5, 6.2
+- **Files**: `common/ehash/src/wallet.rs`
+
+## Phase 5: Pool Role Integration
+
+### 5.1 Add MintConfig to Pool TOML config
+- [ ] Extend Pool configuration structs to include optional MintConfig
+- [ ] Add deserialization support
+- [ ] Document configuration options
+- **Requirements**: 5.1, 5.5
+- **Files**: `roles/pool/src/lib.rs`, example config files
+
+### 5.2 Add mint thread spawning function
+- [ ] Create `spawn_mint_thread(task_manager, config, status_tx)` helper
+- [ ] Instantiate MintHandler
+- [ ] Spawn thread using task_manager
+- [ ] Return sender channel
+- **Requirements**: 1.1, 7.3
+- **Files**: `roles/pool/src/lib.rs`
+
+### 5.3 Integrate mint_sender into Pool initialization
+- [ ] Modify Pool initialization to call spawn_mint_thread if configured
+- [ ] Pass mint_sender to ChannelManager
+- [ ] Add channel_pubkeys HashMap to ChannelManager
+- **Requirements**: 5.1
+- **Files**: `roles/pool/src/lib.rs`
+
+### 5.4 Add register_channel_pubkey to ChannelManager
+- [ ] Implement `register_channel_pubkey(channel_id, pubkey)` method
+- [ ] Store pubkeys in HashMap
+- [ ] Add `get_channel_locking_pubkey(channel_id)` accessor
+- **Requirements**: 2.4
+- **Files**: Pool ChannelManager implementation
+
+### 5.5 Hook share validation in handle_submit_shares_standard
+- [ ] Extract share hash from ShareValidationResult::Valid
+- [ ] Create EHashMintData with all required fields
+- [ ] Send via mint_sender.try_send() (non-blocking)
+- [ ] Log errors but continue mining
+- **Requirements**: 1.2, 3.1, 3.3, 6.1
+- **Files**: Pool message handler for SubmitSharesStandard
+
+### 5.6 Hook share validation in handle_submit_shares_extended
+- [ ] Extract share hash from ShareValidationResult::Valid
+- [ ] Create EHashMintData with all required fields
+- [ ] Send via mint_sender.try_send() (non-blocking)
+- [ ] Log errors but continue mining
+- **Requirements**: 1.2, 3.1, 3.3, 6.1
+- **Files**: Pool message handler for SubmitSharesExtended
+
+### 5.7 Handle BlockFound variant
+- [ ] Extract share hash, template_id, coinbase from BlockFound
+- [ ] Create EHashMintData with block_found=true
+- [ ] Send to mint_sender for keyset lifecycle trigger
+- **Requirements**: 9.1
+- **Files**: Pool message handlers
+
+### 5.8 Add Pool integration tests
+- [ ] Test mint thread spawning and initialization
+- [ ] Test share validation creates mint events
+- [ ] Test mining continues during mint failures
+- **Requirements**: 1.6, 6.1
+- **Files**: Pool integration tests
+
+## Phase 6: TProxy Role Integration
+
+### 6.1 Add WalletConfig to TProxy TOML config
+- [ ] Extend TProxy configuration structs to include TProxyShareConfig
+- [ ] Add locking_pubkey, user_identity, mint_url fields
+- [ ] Add deserialization support
+- **Requirements**: 5.2, 5.5
+- **Files**: `roles/translator/src/lib.rs`, example config files
+
+### 6.2 Add wallet thread spawning function
+- [ ] Create `spawn_wallet_thread(task_manager, config, status_tx)` helper
+- [ ] Instantiate WalletHandler
+- [ ] Spawn thread using task_manager
+- [ ] Return sender channel
+- **Requirements**: 7.6
+- **Files**: `roles/translator/src/lib.rs`
+
+### 6.3 Integrate wallet_sender into TProxy initialization
+- [ ] Modify TProxy initialization to call spawn_wallet_thread if configured
+- [ ] Store wallet_sender in TProxy context
+- [ ] Extract locking_pubkey for connection setup
+- **Requirements**: 5.2
+- **Files**: `roles/translator/src/lib.rs`
+
+### 6.4 Hook SubmitSharesSuccess message handling
+- [ ] Extract channel_id, sequence_number, user_identity
+- [ ] Extract ehash_tokens_minted from TLV (default 0 if not present)
+- [ ] Create WalletCorrelationData
+- [ ] Send via wallet_sender.try_send() (non-blocking)
+- **Requirements**: 3.4, 8.2
+- **Files**: TProxy message handler for SubmitSharesSuccess
+
+### 6.5 Add TProxy integration tests
+- [ ] Test wallet thread spawning and initialization
+- [ ] Test SubmitSharesSuccess creates correlation events
+- [ ] Test translation continues during wallet failures
+- **Requirements**: 6.2
+- **Files**: TProxy integration tests
+
+## Phase 7: JDC Role Integration
+
+### 7.1 Add JdcEHashConfig to JDC TOML config
+- [ ] Add JdcEHashConfig with mode enum and optional mint/wallet configs
+- [ ] Add deserialization support
+- [ ] Document configuration options
+- **Requirements**: 5.3, 5.4
+- **Files**: `roles/jd-client/src/lib.rs`, example config files
+
+### 7.2 Add JDC mint mode support
+- [ ] Add mint thread spawning when mode=Mint
+- [ ] Hook share validation to create mint events
+- [ ] Integrate mint_sender into JDC ChannelManager
+- **Requirements**: 7.4
+- **Files**: `roles/jd-client/src/lib.rs`
+
+### 7.3 Add JDC wallet mode support
+- [ ] Add wallet thread spawning when mode=Wallet
+- [ ] Hook SubmitSharesSuccess to create correlation events
+- [ ] Integrate wallet_sender into JDC context
+- **Requirements**: 7.5
+- **Files**: `roles/jd-client/src/lib.rs`
+
+### 7.4 Add JDC integration tests
+- [ ] Test JDC mint mode configuration and operation
+- [ ] Test JDC wallet mode configuration and operation
+- [ ] Test configuration validation
+- **Requirements**: 7.1, 7.2, 5.6
+- **Files**: JDC integration tests
+
+## Phase 8: SV2 Extension Protocol
+
+### 8.1 Define extension message types
+- [ ] Define extension type constant 0x0003 for eHash
+- [ ] Define TLV field types (0x01: locking_pubkey, 0x02: mint_url, 0x03: ehash_tokens_minted)
+- [ ] Add to protocol message definitions
+- **Requirements**: 2.1
+- **Files**: Protocol message definitions
+
+### 8.2 Add extension negotiation to TProxy
+- [ ] Implement RequestExtensions message with [0x0003]
+- [ ] Handle RequestExtensions.Success response
+- [ ] Store extension_supported flag in TProxy context
+- **Requirements**: 2.1, 2.2
+- **Files**: TProxy connection setup
+
+### 8.3 Add locking_pubkey TLV to OpenMiningChannel
+- [ ] Include locking_pubkey as TLV field 0x0003|0x01 when extension supported
+- [ ] Encode pubkey as 33-byte compressed format
+- [ ] Handle missing TLV gracefully
+- **Requirements**: 2.4
+- **Files**: TProxy channel opening
+
+### 8.4 Process mint_url TLV from OpenMiningChannel.Success
+- [ ] Extract mint_url from TLV field 0x0003|0x02
+- [ ] Store mint_url in TProxy context
+- [ ] Configure wallet handler with mint_url if present
+- **Requirements**: 2.4, 8.1
+- **Files**: TProxy channel opening response handler
+
+### 8.5 Register locking_pubkey in Pool ChannelManager
+- [ ] Extract locking_pubkey from OpenMiningChannel TLV
+- [ ] Call register_channel_pubkey(channel_id, pubkey)
+- [ ] Include mint_url in OpenMiningChannel.Success TLV
+- **Requirements**: 2.4
+- **Files**: Pool channel opening handler
+
+### 8.6 Add ehash_tokens_minted TLV to SubmitSharesSuccess
+- [ ] Include ehash_tokens_minted as TLV field 0x0003|0x03
+- [ ] Track counter in ChannelManager per channel
+- [ ] Increment on successful mint operations
+- **Requirements**: 2.5
+- **Files**: Pool SubmitSharesSuccess response
+
+### 8.7 Add extension protocol tests
+- [ ] Test extension negotiation flow
+- [ ] Test TLV field encoding/decoding
+- [ ] Test backward compatibility without extension support
+- **Requirements**: 2.1, 2.2, 2.3, 2.6
+- **Files**: Protocol integration tests
+
+## Phase 9: Integration Testing
+
+### 9.1 Add end-to-end Pool→Mint→Wallet test
+- [ ] Set up test Pool with mint configuration
+- [ ] Set up test TProxy with wallet configuration
+- [ ] Submit shares and verify mint events
+- [ ] Verify P2PK token creation
+- **Requirements**: 1.6, 8.4
+- **Files**: Integration test suite
+
+### 9.2 Test external wallet redemption flow
+- [ ] Create external wallet with locking keypair
+- [ ] Query mint for P2PK-locked tokens
+- [ ] Verify token redemption using CDK
+- **Requirements**: 8.3, 8.4, 8.5
+- **Files**: Integration test suite
+
+### 9.3 Test fault tolerance and recovery
+- [ ] Test mint failures don't affect mining
+- [ ] Test wallet failures don't affect translation
+- [ ] Test automatic recovery mechanisms
+- [ ] Test retry queue processing
+- **Requirements**: 6.1, 6.2, 6.3, 6.5
+- **Files**: Integration test suite
+
+### 9.4 Test graceful shutdown
+- [ ] Test mint thread completes pending operations on shutdown
+- [ ] Test wallet thread completes pending operations on shutdown
+- [ ] Verify no data loss during shutdown
+- **Requirements**: 6.5
+- **Files**: Integration test suite
+
+### 9.5 Test JDC dual mode operation
+- [ ] Test JDC mint mode with share processing
+- [ ] Test JDC wallet mode with correlation tracking
+- [ ] Test mode switching via configuration
+- **Requirements**: 7.1, 7.2, 7.7
+- **Files**: Integration test suite
+
+## Phase 10: Keyset Lifecycle (Future)
+
+_Note: This phase implements the full keyset lifecycle management. Can be deferred until basic minting is working._
+
+### 10.1 Add keyset lifecycle data structures
+- [ ] Define KeysetState enum (ACTIVE, QUANTIFYING, PAYOUT, EXPIRED)
+- [ ] Add KeysetInfo struct with state and metadata
+- [ ] Add keyset tracking to MintHandler
+- **Requirements**: 9.1, 9.2
+- **Files**: `common/ehash/src/keyset.rs`
+
+### 10.2 Implement keyset rotation on block found
+- [ ] Handle block_found=true in MintHandler
+- [ ] Create new ACTIVE keyset
+- [ ] Transition previous keyset to QUANTIFYING
+- **Requirements**: 9.1, 9.3
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.3 Add Template Provider integration
+- [ ] Query Template Provider for block reward details
+- [ ] Calculate total reward (coinbase + fees)
+- [ ] Store reward amount for conversion rate calculation
+- **Requirements**: 9.1
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.4 Add BOLT12 payment detection (stub)
+- [ ] Define PayoutTrigger enum with BlockReward and Bolt12Payment
+- [ ] Add stub for LDK integration
+- [ ] Handle payout trigger in keyset lifecycle
+- **Requirements**: 9.2
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.5 Implement quantification phase
+- [ ] Calculate eHash-to-sats conversion rate
+- [ ] Store conversion rate with keyset
+- [ ] Transition keyset to PAYOUT state
+- **Requirements**: 9.4
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.6 Implement eHash to sats swap
+- [ ] Add swap_ehash_for_sats method
+- [ ] Verify keyset is in PAYOUT state
+- [ ] Calculate sats amount using conversion rate
+- [ ] Mint sats tokens and burn eHash tokens
+- **Requirements**: 9.5
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.7 Implement keyset expiration
+- [ ] Add timeout or redemption completion tracking
+- [ ] Transition keyset to EXPIRED state
+- [ ] Archive keyset metadata
+- **Requirements**: 9.6
+- **Files**: `common/ehash/src/mint.rs`
+
+### 10.8 Add keyset lifecycle tests
+- [ ] Test keyset rotation on block found
+- [ ] Test conversion rate calculation
+- [ ] Test eHash to sats swap
+- [ ] Test keyset expiration
+- **Requirements**: 9.1-9.6
+- **Files**: `common/ehash/src/keyset.rs`, `common/ehash/src/mint.rs`
+
+## Phase 11: Pubkey Encoding (Future)
+
+_Note: This phase implements bech32 encoding for locking pubkeys. Can be deferred._
+
+### 11.1 Add bech32 encoding module
+- [ ] Create `common/ehash/src/encoding.rs`
+- [ ] Implement `encode_locking_pubkey(pubkey) -> String` with 'hpub' prefix
+- [ ] Implement `decode_locking_pubkey(encoded) -> PublicKey`
+- **Files**: `common/ehash/src/encoding.rs`
+
+### 11.2 Update config parsing
+- [ ] Parse bech32 locking pubkeys from TOML config
+- [ ] Validate 'hpub' prefix
+- [ ] Convert to raw PublicKey for internal use
+- **Files**: `common/ehash/src/config.rs`
+
+### 11.3 Add encoding tests
+- [ ] Test round-trip encoding/decoding
+- [ ] Test invalid prefix handling
+- [ ] Test checksum validation
+- **Files**: `common/ehash/src/encoding.rs`
+
+## Notes
+
+- Tasks marked with `*` in the original plan have been expanded into multiple focused tasks
+- Each task should result in a minimal, reviewable commit
+- Phase 10 (Keyset Lifecycle) and Phase 11 (Pubkey Encoding) can be deferred until basic functionality is working
+- All tests should be run after each commit to ensure no regressions
+- Use `git add -p` for careful staging of changes

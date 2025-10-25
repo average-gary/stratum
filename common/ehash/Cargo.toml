@@ -1,0 +1,36 @@
+[package]
+name = "ehash-integration"
+version = "0.1.0"
+authors = ["eHash Developers"]
+edition = "2021"
+readme = "README.md"
+description = "eHash (hashpool) integration for Stratum V2 - Cashu ecash minting and wallet functionality"
+documentation = "https://docs.rs/ehash"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PioneerHash/ehash"
+homepage = "https://hashpool.dev"
+keywords = ["stratum", "mining", "bitcoin", "cashu", "ecash"]
+
+[dependencies]
+# CDK - Cashu Development Kit
+cdk = { path = "../../deps/cdk/crates/cdk", features = ["mint", "wallet"] }
+cdk-common = { path = "../../deps/cdk/crates/cdk-common" }
+
+# Core async and channel dependencies
+async-channel = "1.8.0"
+tokio = { version = "1.44.1", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0.89", features = ["derive"] }
+
+# Bitcoin primitives (compatible with both CDK 0.32.2 and Stratum V2 0.32.5)
+bitcoin = "0.32"
+
+# Logging
+tracing = "0.1"
+
+# Error handling
+thiserror = "1"
+
+[features]
+default = []

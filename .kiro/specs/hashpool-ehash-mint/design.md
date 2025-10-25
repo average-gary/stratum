@@ -9,6 +9,36 @@ This design implements hashpool.dev by integrating Cashu ecash functionality int
 
 The design leverages the existing Stratum v2 architecture patterns and integrates with the CDK (Cashu Development Kit) from the existing git submodule at `deps/cdk`.
 
+## Hashpool Research Findings
+
+Based on analysis of the hashpool submodule at `deps/hashpool/protocols/ehash/`:
+
+### eHash Calculation Algorithm
+- **Formula**: `2^(leading_zeros - min_leading_zeros)` where `leading_zeros` is counted from share hash bytes
+- **Leading Zero Calculation**: Counts leading zero bits across all 32 bytes, stopping at first non-zero bit
+- **Minimum Threshold**: Configurable `min_leading_zeros` parameter (default 32 in tests) - shares below earn 0 eHash
+- **Maximum Cap**: Results capped at `2^63` to stay within u64 bounds
+- **Implementation**: Available in `deps/hashpool/protocols/ehash/src/work.rs`
+
+### CDK Integration Details
+- **Currency Unit**: Uses custom "HASH" unit type in CDK
+- **Single-Unit Architecture**: Each CDK Wallet is tied to one CurrencyUnit (TProxy uses HASH-only wallet)
+- **Keyset Structure**: 64 signing keys with amounts as powers of 2 (1, 2, 4, 8, ..., 2^63)
+- **Share Hash Format**: 32-byte canonical representation with SV2 type conversions
+- **Quote Protocol**: Structured requests with share hash, amount, locking pubkey, and "HASH" unit
+- **eHash-to-Sats Conversion**: Use eHash tokens to create PAID quotes for sats redemption (custom mint logic)
+
+### Key Functions Available
+- `calculate_ehash_amount(hash: [u8; 32], min_leading_zeros: u32) -> u64`
+- `calculate_difficulty(hash: [u8; 32]) -> u32` - counts leading zero bits
+- `ShareHash` type with conversions to/from SV2 types (PubKey, U256)
+- `build_mint_quote_request()` and `parse_mint_quote_request()` for SV2 protocol
+
+### Dependency Considerations
+- **Current approach**: Use `ehash = { path = "../../deps/hashpool/protocols/ehash" }`
+- **Fallback option**: If API issues arise, rewrite core calculation functions in our own repo
+- **Core functions needed**: `calculate_ehash_amount()`, `calculate_difficulty()`, and `ShareHash` type
+
 ## Architecture
 
 ### High-Level Component Interaction
@@ -36,12 +66,12 @@ sequenceDiagram
     Pool->>Pool: Validate Share & Calculate eHash Amount
     Pool->>Mint: Create CDK MintQuote (pubkey=locking_pubkey, state=PAID, amount=ehash_amount)
     Pool->>Mint: Mint P2PK-locked tokens using SpendingConditions::new_p2pk(locking_pubkey)
-    Mint->>Pool: P2PK-locked eHash tokens created
-    Pool->>TProxy: SubmitSharesSuccess + TLV[outstanding_quotes_count]
+    Pool->>Pool: Increment ehash_tokens_minted counter
+    Pool->>TProxy: SubmitSharesSuccess + TLV[ehash_tokens_minted]
     
     Note over ExternalWallet, Mint: 4. External Wallet P2PK Redemption
-    ExternalWallet->>TProxy: Check outstanding quotes count
-    TProxy->>ExternalWallet: Return outstanding_quotes_count
+    ExternalWallet->>TProxy: Check ehash tokens minted count
+    TProxy->>ExternalWallet: Return ehash_tokens_minted
     ExternalWallet->>Mint: Query P2PK-locked tokens by pubkey
     Mint->>ExternalWallet: Return P2PK-locked eHash tokens
     ExternalWallet->>Mint: CDK receive with ReceiveOptions{p2pk_signing_keys: [secret_key]}
@@ -65,7 +95,9 @@ sequenceDiagram
     Mint->>Mint: Calculate eHash-to-sats conversion rate
     
     Note over ExternalWallet, Mint: 6. eHash to Sats Conversion
-    ExternalWallet->>Mint: Swap eHash tokens for sats
+    ExternalWallet->>Mint: Submit eHash tokens for sats quote payment
+    Mint->>Mint: Validate eHash tokens and mark sats quote as PAID
+    ExternalWallet->>Mint: Redeem PAID sats quote
     Mint->>ExternalWallet: Return sats tokens
     
     Mint->>Mint: All eHash redeemed or timeout reached
@@ -74,16 +106,18 @@ sequenceDiagram
 
 ### Thread Architecture
 
-Following the Pool's existing thread spawning pattern for share persistence:
+The system uses dedicated threads for eHash operations that run independently of mining operations:
 
-- **Pool/JDC**: Spawn a Mint thread using `task_manager.spawn()` that receives ShareEvents via async channels
-- **TProxy**: Spawn a Wallet thread using the same task manager pattern that receives SubmitSharesSuccess events via async channels
+- **Pool/JDC**: Spawn a Mint thread using `task_manager.spawn()` that receives EHashMintData via async channels from share validation results
+- **TProxy**: Spawn a Wallet thread using the same task manager pattern that receives WalletCorrelationData via async channels from SubmitSharesSuccess events
 
-The implementation will mirror the existing `ShareFileHandler` pattern where:
-1. A handler struct manages the CDK instance and async channel communication
-2. The main role creates the handler and gets sender/receiver channels
-3. A background task is spawned via `task_manager.spawn()` to process events
-4. The handler implements the `Persistence` trait for compatibility
+The implementation follows this pattern:
+1. Handler structs (MintHandler/WalletHandler) manage CDK instances and async channel communication
+2. The main role creates handlers and gets sender/receiver channels
+3. Background tasks are spawned via `task_manager.spawn()` with graceful shutdown support
+4. eHash operations run independently - failures don't affect mining operations
+5. Handlers include fault tolerance with retry queues and automatic recovery
+6. Integration occurs at share validation points
 
 ## Share Validation Integration Strategy
 
@@ -229,9 +263,16 @@ impl MintHandler {
     /// Main processing loop for the mint thread
     pub async fn run(&mut self) -> Result<(), MintError>;
     
+    /// Main processing loop with graceful shutdown handling
+    /// Completes pending mint operations before terminating
+    pub async fn run_with_shutdown(&mut self, shutdown_rx: async_channel::Receiver<()>) -> Result<(), MintError>;
+    
     /// Process share validation data and mint eHash tokens
     /// Uses CDK's native MintQuote and database for accounting
     pub async fn process_mint_data(&mut self, data: EHashMintData) -> Result<(), MintError>;
+    
+    /// Gracefully shutdown the mint handler, completing pending operations
+    pub async fn shutdown(&mut self) -> Result<(), MintError>;
     
     /// Register locking pubkey for a channel (from TLV during channel setup)
     pub fn register_channel_pubkey(&mut self, channel_id: u32, pubkey: PublicKey);
@@ -252,20 +293,28 @@ pub struct MintSender {
 
 ### 3. Wallet Handler Component
 
-The WalletHandler manages share correlation and external wallet integration (shared by TProxy and JDC-wallet mode):
+The WalletHandler manages share correlation and focuses on HASH unit wallet operations (TProxy uses HASH unit only):
 
 ```rust
 use bitcoin::secp256k1::PublicKey;
-use cdk::{Wallet as CdkWallet, Amount};
+use cdk::{Wallet as CdkWallet, Amount, nuts::CurrencyUnit};
 
 pub struct WalletHandler {
-    /// CDK Wallet instance for external wallet operations
-    wallet_instance: Option<CdkWallet>,
+    /// CDK Wallet instance for HASH unit operations only (per CDK single-unit architecture)
+    wallet_instance: Option<CdkWallet>,  // Always configured for CurrencyUnit::Custom("HASH")
     receiver: async_channel::Receiver<WalletCorrelationData>,
     sender: async_channel::Sender<WalletCorrelationData>,
     config: WalletConfig,
     locking_pubkey: PublicKey,  // Configured locking pubkey for wallet authentication
     user_identity: String,  // Derived from locking pubkey or configured
+    
+    // Fault tolerance fields
+    retry_queue: VecDeque<WalletCorrelationData>,
+    failure_count: u32,
+    last_failure: Option<SystemTime>,
+    max_retries: u32,
+    backoff_multiplier: u64,
+    recovery_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -274,7 +323,7 @@ pub struct WalletCorrelationData {
     pub sequence_number: u32,
     pub user_identity: String,
     pub timestamp: SystemTime,
-    pub outstanding_quotes_count: Option<u32>,
+    pub ehash_tokens_minted: u32,
 }
 
 impl WalletHandler {
@@ -287,8 +336,21 @@ impl WalletHandler {
     /// Main processing loop for the wallet thread
     pub async fn run(&mut self) -> Result<(), WalletError>;
     
+    /// Main processing loop with graceful shutdown handling
+    /// Completes pending wallet operations before terminating
+    pub async fn run_with_shutdown(&mut self, shutdown_rx: async_channel::Receiver<()>) -> Result<(), WalletError>;
+    
     /// Process SubmitSharesSuccess correlation data
     pub async fn process_correlation_data(&mut self, data: WalletCorrelationData) -> Result<(), WalletError>;
+    
+    /// Gracefully shutdown the wallet handler, completing pending operations
+    pub async fn shutdown(&mut self) -> Result<(), WalletError>;
+    
+    /// Process correlation data with automatic retry on failure
+    pub async fn process_correlation_data_with_retry(&mut self, data: WalletCorrelationData) -> Result<(), WalletError>;
+    
+    /// Attempt to recover from failures and process retry queue
+    pub async fn attempt_recovery(&mut self) -> Result<(), WalletError>;
     
     /// Get locking pubkey for connection/channel setup
     pub fn get_locking_pubkey(&self) -> PublicKey;
@@ -296,8 +358,8 @@ impl WalletHandler {
     /// Get user identity (derived from pubkey or configured)
     pub fn get_user_identity(&self) -> &str;
     
-    /// Query mint for outstanding quotes by locking pubkey
-    async fn query_outstanding_quotes(&self) -> Result<Vec<MintQuote>, WalletError>;
+    /// Query mint for P2PK-locked tokens by locking pubkey
+    async fn query_p2pk_tokens(&self) -> Result<Vec<Proof>, WalletError>;
 }
 ```
 
@@ -331,24 +393,42 @@ impl ChannelManager {
     }
 }
 
-// Thread spawning pattern (follows existing Pool/JDC patterns):
+// Thread spawning pattern with graceful shutdown:
 // 1. Create MintHandler with config and status_tx
 // 2. Get sender/receiver channels from handler
 // 3. Pass sender to ChannelManager initialization
-// 4. Spawn MintHandler::run() task via task_manager.spawn()
+// 4. Spawn MintHandler::run() task with shutdown signal handling
 // 5. Share validation events automatically flow to mint thread
 // 6. Mint thread processes events independently of mining operations
+// 7. On shutdown, mint thread completes pending operations before terminating
 
 pub async fn spawn_mint_thread(
     task_manager: &mut TaskManager,
     config: MintConfig,
     status_tx: &Sender<Status>,
+    shutdown_rx: async_channel::Receiver<()>,
 ) -> Result<async_channel::Sender<EHashMintData>, MintError> {
     let mut mint_handler = MintHandler::new(config, status_tx.clone()).await?;
     let sender = mint_handler.get_sender();
     
     task_manager.spawn("mint_handler", async move {
-        mint_handler.run().await
+        mint_handler.run_with_shutdown(shutdown_rx).await
+    });
+    
+    Ok(sender)
+}
+
+pub async fn spawn_wallet_thread(
+    task_manager: &mut TaskManager,
+    config: WalletConfig,
+    status_tx: &Sender<Status>,
+    shutdown_rx: async_channel::Receiver<()>,
+) -> Result<async_channel::Sender<WalletCorrelationData>, WalletError> {
+    let mut wallet_handler = WalletHandler::new(config, status_tx.clone()).await?;
+    let sender = wallet_handler.get_sender();
+    
+    task_manager.spawn("wallet_handler", async move {
+        wallet_handler.run_with_shutdown(shutdown_rx).await
     });
     
     Ok(sender)
@@ -428,8 +508,13 @@ pub struct MintConfig {
     // CDK database configuration - for cdk::cdk_database::MintDatabase
     pub database_url: Option<String>,  // For CDK database backends (sqlite, postgres, redb)
     
-    // Payment logic (hashpool-specific)
-    pub min_leading_zeros_delta: u32,  // Delta below network difficulty for minimum eHash (e.g., 8 means min = network_difficulty - 8)
+    // Payment logic (hashpool-specific) 
+    pub min_leading_zeros: u32,  // Minimum leading zero bits required to earn 1 unit of ehash (hashpool default: 32)
+    
+    // Fault tolerance configuration
+    pub max_retries: Option<u32>,  // Maximum retry attempts before disabling (default: 10)
+    pub backoff_multiplier: Option<u64>,  // Backoff multiplier in seconds (default: 2)
+    pub recovery_enabled: Option<bool>,  // Enable automatic recovery (default: true)
     
     // Integration with existing Stratum v2 config
     pub log_level: Option<String>,
@@ -443,8 +528,13 @@ pub struct TProxyShareConfig {
     // User identity (optional - can be derived from pubkey)
     pub user_identity: Option<String>,  // User identity to use for channels (defaults to pubkey-derived)
     
-    // Mint correlation settings
-    pub mint_url: Option<MintUrl>,  // Optional mint URL for external wallet integration
+    // Mint correlation settings (HASH unit wallet only per CDK architecture)
+    pub mint_url: Option<MintUrl>,  // Optional mint URL for HASH unit wallet integration
+    
+    // Fault tolerance configuration
+    pub max_retries: Option<u32>,  // Maximum retry attempts before disabling (default: 10)
+    pub backoff_multiplier: Option<u64>,  // Backoff multiplier in seconds (default: 2)
+    pub recovery_enabled: Option<bool>,  // Enable automatic recovery (default: true)
     
     // Integration with existing Stratum v2 config
     pub log_level: Option<String>,
@@ -522,10 +612,11 @@ impl EHashMintData {
     }
     
     /// Calculate eHash amount using hashpool's exponential valuation method
-    pub fn calculate_ehash_amount(&self, network_difficulty: u32, min_leading_zeros_delta: u32) -> Amount {
+    /// Formula: 2^(leading_zero_bits - minimum_difficulty)
+    /// Returns 0 if share doesn't meet minimum difficulty threshold
+    pub fn calculate_ehash_amount(&self, minimum_difficulty: u32) -> Amount {
         let hash_bytes: [u8; 32] = self.share_hash.as_byte_array().try_into().unwrap_or([0; 32]);
-        let min_leading_zeros = network_difficulty.saturating_sub(min_leading_zeros_delta);
-        let ehash_amount = ehash::calculate_ehash_amount(hash_bytes, min_leading_zeros);
+        let ehash_amount = ehash::calculate_ehash_amount(hash_bytes, minimum_difficulty);
         Amount::from(ehash_amount)
     }
 }
@@ -627,18 +718,12 @@ pub struct ShareEvent {
 
 impl ShareEvent {
     /// Calculate eHash amount using hashpool's exponential valuation method
-    /// 
-    /// Uses the formula: 2^(leading_zeros - min_leading_zeros)
-    /// where min_leading_zeros = network_difficulty - min_leading_zeros_delta
-    /// 
-    /// This follows hashpool's approach where shares with more leading zeros
-    /// earn exponentially more eHash tokens, rewarding higher difficulty work.
-    /// The minimum threshold adjusts with network difficulty epochs.
-    pub fn calculate_ehash_amount(&self, network_difficulty: u32, min_leading_zeros_delta: u32) -> Amount {
+    /// Formula: 2^(leading_zero_bits - minimum_difficulty)
+    /// Returns 0 if share doesn't meet minimum difficulty threshold
+    pub fn calculate_ehash_amount(&self, minimum_difficulty: u32) -> Amount {
         if let Some(hash) = &self.share_hash {
             let hash_bytes: [u8; 32] = hash.as_byte_array().try_into().unwrap_or([0; 32]);
-            let min_leading_zeros = network_difficulty.saturating_sub(min_leading_zeros_delta);
-            let ehash_amount = ehash::calculate_ehash_amount(hash_bytes, min_leading_zeros);
+            let ehash_amount = ehash::calculate_ehash_amount(hash_bytes, minimum_difficulty);
             Amount::from(ehash_amount)
         } else {
             Amount::from(0)
@@ -646,7 +731,7 @@ impl ShareEvent {
     }
 }
 
-// Re-export hashpool's calculation functions
+// Re-export hashpool's calculation functions from deps/hashpool/protocols/ehash
 pub use ehash::{calculate_ehash_amount, calculate_difficulty};
 ```
 
@@ -684,33 +769,197 @@ impl From<MintError> for Status {
 }
 ```
 
-### Error Recovery
+### Error Recovery and Fault Tolerance
 
-- **Mint failures**: Pool/JDC continues normal operation, mint operations queued for retry
-- **Wallet failures**: TProxy continues normal translation, redemption operations queued for retry
-- **Network failures**: Implement exponential backoff for CDK operations
-- **CDK errors**: Map to existing Status system for consistent error reporting
+The system is designed with fault tolerance to ensure mining operations continue even when eHash operations fail:
+
+#### Thread Independence
+- **Mining Thread Isolation**: Mining operations (share validation, solution propagation) continue normally even if Mint/Wallet threads fail
+- **eHash Thread Isolation**: Mint/Wallet thread failures don't affect core mining functionality
+- **Optional eHash Operations**: All eHash functionality is optional - mining works without it
+
+#### Failure Scenarios and Recovery
+
+##### Mint Thread Failures
+- **Pool/JDC Behavior**: Continue normal mining operations, log mint failures
+- **Event Queuing**: Failed mint events are queued for retry with exponential backoff
+- **Automatic Recovery**: Attempt to restart mint thread after configurable delay
+- **Fallback Mode**: If mint consistently fails, disable eHash minting but continue mining
+- **Status Reporting**: Report mint status via existing Status system without affecting mining
+
+##### Wallet Thread Failures  
+- **TProxy Behavior**: Continue normal translation operations, log wallet failures
+- **Correlation Queuing**: Failed correlation events are queued for retry
+- **Automatic Recovery**: Attempt to restart wallet thread after configurable delay
+- **Fallback Mode**: If wallet consistently fails, disable correlation tracking but continue translation
+- **Status Reporting**: Report wallet status independently of translation status
+
+##### CDK/Network Failures
+- **Transient Failures**: Implement exponential backoff for CDK operations (mint, wallet, network)
+- **Persistent Failures**: After max retries, disable eHash operations but continue mining
+- **Network Partitions**: Queue operations during network issues, replay when connectivity restored
+- **Database Failures**: Use CDK's built-in database recovery mechanisms
+
+#### Recovery Implementation Strategy
+
+```rust
+pub struct MintHandler {
+    // ... existing fields ...
+    retry_queue: VecDeque<EHashMintData>,
+    failure_count: u32,
+    last_failure: Option<SystemTime>,
+    max_retries: u32,
+    backoff_multiplier: u64,
+    recovery_enabled: bool,
+}
+
+impl MintHandler {
+    /// Process mint data with automatic retry on failure
+    pub async fn process_mint_data_with_retry(&mut self, data: EHashMintData) -> Result<(), MintError> {
+        match self.process_mint_data(data.clone()).await {
+            Ok(()) => {
+                // Reset failure count on success
+                self.failure_count = 0;
+                self.last_failure = None;
+                Ok(())
+            }
+            Err(e) => {
+                // Queue for retry and increment failure count
+                self.retry_queue.push_back(data);
+                self.failure_count += 1;
+                self.last_failure = Some(SystemTime::now());
+                
+                // Disable if too many failures
+                if self.failure_count > self.max_retries {
+                    warn!("Mint thread disabled after {} failures", self.max_retries);
+                    self.recovery_enabled = false;
+                }
+                
+                Err(e)
+            }
+        }
+    }
+    
+    /// Attempt to recover from failures
+    pub async fn attempt_recovery(&mut self) -> Result<(), MintError> {
+        if !self.recovery_enabled {
+            return Ok(());
+        }
+        
+        // Exponential backoff
+        if let Some(last_failure) = self.last_failure {
+            let backoff_duration = Duration::from_secs(
+                self.backoff_multiplier * (2_u64.pow(self.failure_count.min(10)))
+            );
+            
+            if last_failure.elapsed().unwrap_or(Duration::ZERO) < backoff_duration {
+                return Ok(());
+            }
+        }
+        
+        // Process retry queue
+        while let Some(data) = self.retry_queue.pop_front() {
+            match self.process_mint_data(data.clone()).await {
+                Ok(()) => {
+                    info!("Mint recovery successful");
+                    self.failure_count = 0;
+                    self.last_failure = None;
+                }
+                Err(_) => {
+                    // Put back in queue and stop processing
+                    self.retry_queue.push_front(data);
+                    break;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+}
+```
+
+#### Integration with Mining Operations
+
+```rust
+// In ChannelManager share validation
+match res {
+    Ok(ShareValidationResult::Valid(share_hash)) => {
+        // ALWAYS continue with mining operations regardless of mint status
+        let response = SubmitSharesSuccess { /* ... */ };
+        
+        // TRY to send to mint thread (non-blocking)
+        if let Some(mint_sender) = &self.mint_sender {
+            let mint_data = EHashMintData { /* ... */ };
+            
+            // Use try_send to avoid blocking mining operations
+            if let Err(e) = mint_sender.try_send(mint_data) {
+                // Log error but don't fail the mining operation
+                warn!("Failed to send mint data: {}, mining continues", e);
+            }
+        }
+        
+        // Continue with normal mining flow
+        Ok(response)
+    }
+}
+```
+
+### Graceful Shutdown Strategy
+
+The Mint and Wallet threads require special shutdown handling to ensure data integrity:
+
+#### Mint Thread Shutdown
+1. **Signal Reception**: Mint thread receives shutdown signal via dedicated channel
+2. **Channel Closure**: Stop accepting new EHashMintData events by closing receiver
+3. **Pending Operations**: Complete all pending mint operations in the queue
+4. **CDK Cleanup**: Properly close CDK Mint instance and database connections
+5. **State Persistence**: Ensure all minted tokens are properly recorded
+6. **Thread Termination**: Exit gracefully after cleanup completion
+
+#### Wallet Thread Shutdown
+1. **Signal Reception**: Wallet thread receives shutdown signal via dedicated channel
+2. **Channel Closure**: Stop accepting new WalletCorrelationData events
+3. **Pending Redemptions**: Complete any in-progress token redemption operations
+4. **CDK Cleanup**: Properly close CDK Wallet instance and network connections
+5. **State Persistence**: Ensure wallet state is properly saved
+6. **Thread Termination**: Exit gracefully after cleanup completion
+
+#### Implementation Pattern
+```rust
+pub async fn run_with_shutdown(&mut self, shutdown_rx: async_channel::Receiver<()>) -> Result<(), MintError> {
+    loop {
+        tokio::select! {
+            // Process incoming events
+            event = self.receiver.recv() => {
+                match event {
+                    Ok(data) => self.process_mint_data(data).await?,
+                    Err(_) => break, // Channel closed
+                }
+            }
+            // Handle shutdown signal
+            _ = shutdown_rx.recv() => {
+                info!("Mint thread received shutdown signal, completing pending operations...");
+                self.shutdown().await?;
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+```
 
 ## Testing Strategy
 
 ### Unit Testing
 
-1. **Mint Component Tests**
-   - ShareEvent processing and conversion
-   - Payment condition evaluation
-   - CDK mint integration
-   - Error handling and recovery
+Focus on eHash-specific functionality (Stratum v2 and CDK unit tests are handled by upstream crates):
 
-2. **Wallet Component Tests**
-   - SubmitSharesSuccess event handling
-   - Invoice querying and redemption
-   - CDK wallet integration
-   - Network failure scenarios
-
-3. **Configuration Tests**
-   - TOML parsing and validation
-   - CDK configuration integration
-   - Unit type support validation
+1. **eHash-Specific Tests**
+   - ShareEvent processing and conversion from share validation results
+   - EHashMintData creation from validation context
+   - WalletCorrelationData processing from SubmitSharesSuccess
+   - eHash amount calculation using hashpool functions
+   - Share hash extraction and conversion to CDK types
 
 ### Integration Testing
 
@@ -719,27 +968,10 @@ impl From<MintError> for Status {
    - JDC → Mint → Wallet redemption flow
    - Multi-unit type support (sats and hash)
 
-2. **Persistence Integration Tests**
-   - Compatibility with existing Persistence trait
-   - ShareAccountingEvent to ShareEvent conversion
-   - Channel communication reliability
-
-3. **Configuration Integration Tests**
-   - Stratum v2 TOML configuration merging
-   - CDK configuration validation
-   - Runtime configuration updates
-
-### Performance Testing
-
-1. **Throughput Testing**
-   - High-frequency share processing
-   - Concurrent mint operations
-   - Wallet redemption performance
-
-2. **Resource Usage Testing**
-   - Memory usage with CDK integration
-   - Thread resource consumption
-   - Database performance (if applicable)
+2. **Thread Communication Tests**
+   - Share validation to EHashMintData flow
+   - SubmitSharesSuccess to WalletCorrelationData flow
+   - Async channel reliability under load
 
 ## Module Structure and Dependencies
 
@@ -749,8 +981,8 @@ impl From<MintError> for Status {
 [dependencies]
 cdk = { path = "../../deps/cdk/crates/cdk", features = ["mint", "wallet"] }
 cdk-common = { path = "../../deps/cdk/crates/cdk-common" }
-ehash = { path = "../../roles/deps/hashpool/protocols/ehash" }
-stratum-core = { path = "../../protocols/v2/channels-sv2" }  # For ShareAccountingEvent
+ehash = { path = "../../deps/hashpool/protocols/ehash" }
+stratum-apps = { path = "../../roles/stratum-apps" }  # For share validation integration
 bitcoin = { version = "0.32.2", features = ["secp256k1"] }
 # Other common dependencies...
 ```
@@ -772,6 +1004,22 @@ ehash = { path = "../../common/ehash", default-features = false, features = ["sh
 
 ## Implementation Notes
 
+### Hashpool Research Results
+
+Based on analysis of the hashpool submodule at `deps/hashpool`, the following has been determined:
+
+1. **eHash Calculation Algorithm**: Uses exponential valuation `2^(leading_zero_bits - minimum_difficulty)` from `deps/hashpool/protocols/ehash/src/work.rs`
+2. **Minimum Threshold Logic**: Configurable `minimum_difficulty` parameter (default: 32 leading zero bits) from shared config
+3. **Calculation Implementation**: Available functions `calculate_ehash_amount()` and `calculate_difficulty()` in ehash crate
+4. **Configuration**: Uses `EhashConfig { minimum_difficulty: u32 }` structure in shared configuration
+5. **Integration Pattern**: Pool processes shares and sends mint quote requests to separate mint daemon via SV2 messaging
+
+### Remaining Research Items
+
+1. **Keyset Lifecycle Timing**: Understand the exact triggers and timing for keyset state transitions
+2. **External Wallet Integration**: Research the specific protocols hashpool uses for external wallet redemption
+3. **SV2 Extension Protocol**: Analyze hashpool's SV2 extension implementation for eHash negotiation
+
 ### CDK Integration Points
 
 1. **Submodule Integration**: Use the existing CDK submodule at `deps/cdk` (tagged v0.13.x version)
@@ -784,47 +1032,19 @@ ehash = { path = "../../common/ehash", default-features = false, features = ["sh
 ### Compatibility Considerations
 
 1. **CDK Submodule**: Leverage the existing CDK submodule at `deps/cdk` (tagged v0.13.x version)
-2. **Hashpool Submodule**: Use the existing hashpool submodule at `roles/deps/hashpool` for ehash calculations
-3. **Updated Persistence Architecture**: Use the new `Persistence<T>` enum and `PersistenceHandler` trait from recent refactoring
-4. **ShareAccountingEvent Changes**: Use reintroduced `share_sequence_number` field and `f64` share_work values
-5. **Stratum-Apps Integration**: Use the refactored persistence components from `stratum-apps` crate
+2. **Hashpool Submodule**: Use the existing hashpool submodule at `deps/hashpool` for ehash calculations
+3. **Stratum-Apps Integration**: Use the current share validation architecture from `stratum-apps` crate
 6. **Network Difficulty**: Access current network difficulty from existing Stratum v2 template/job context
 7. **Configuration**: Extend existing TOML structures without breaking changes
-8. **Status System**: Integrate new error types with existing Status enum (removed from persistence)
+8. **Status System**: Integrate new error types with existing Status enum
 9. **Thread Management**: Follow existing patterns for thread spawning and management
 
 ### Deployment Flexibility
 
 1. **Optional Components**: Allow disabling ecash functionality via configuration
-2. **Gradual Migration**: Support running both file persistence and mint simultaneously
+2. **Independent Operation**: eHash operations run independently of core mining functionality
 3. **Multi-Instance**: Support multiple mint/wallet instances for different unit types
 4. **Network Configuration**: Flexible mint URL configuration for different deployment scenarios
-## e
-Hash Issuance Protocol Flow (Based on Hashpool v3)
-
-The protocol follows this sequence based on the hashpool.dev ehash issuance diagram:
-
-### 1. Initial Setup
-- **Cashu Wallet → Proxy**: Provides master locking pubkey
-- **Proxy → Pool**: Opens connection with wallet's master pubkey
-
-### 2. Mining Loop
-- **Pool → Proxy**: Sends block template
-- **Proxy → ASIC**: Forwards block template  
-- **ASIC → Proxy**: Submits mining share when found
-- **Proxy → Pool**: Submits share (locking pubkey already established at connection setup)
-
-### 3. Share Processing & Quote Creation
-- **Pool**: Validates the submitted share
-- **Pool → Mint**: Creates quote in PAID status tagged with (channel_id, sequence_number) and associated with locking pubkey
-- **Pool → Proxy**: Confirms share accepted with SubmitSharesSuccess
-
-### 4. Wallet Redemption
-- **External Wallet**: Authenticates with mint using locking pubkey
-- **External Wallet ↔ Mint**: Queries for PAID quotes by (channel_id, sequence_number) range
-- **External Wallet ↔ Mint**: Requests to mint tokens for found quotes
-- **External Wallet**: Generates blinded secrets and unlocking signature
-- **External Wallet ↔ Mint**: Completes mint request
 
 ### Key Protocol Elements
 

@@ -17,7 +17,7 @@ This feature implements hashpool.dev, a system that integrates Cashu ecash minti
 3. WHEN the Mint thread receives EHashMintData THEN it SHALL calculate eHash amount using the share hash leading zeros
 4. WHEN EHashMintData is created THEN the system SHALL include all required data (share_hash, channel_id, user_identity, target, sequence_number) from the validation context
 5. WHEN minting operations occur THEN the system SHALL rely on CDK's native database and accounting capabilities for audit trails and transaction records
-6. WHEN the Mint operates THEN it SHALL support both Bitcoin (sats/BTC) and hash unit types for token issuance
+6. WHEN the Mint operates THEN it SHALL support HASH unit for eHash token issuance and create PAID sats quotes using eHash tokens as payment
 
 ### Requirement 2: SV2 eHash Extension Implementation
 
