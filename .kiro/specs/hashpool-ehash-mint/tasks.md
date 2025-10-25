@@ -5,67 +5,68 @@ This document breaks down the eHash persistence implementation into small, focus
 ## Phase 1: Foundation - Shared Module Setup
 
 ### 1.1 Create common/ehash crate scaffold
-- [ ] Create `common/ehash/Cargo.toml` with basic dependencies
-- [ ] Create `common/ehash/src/lib.rs` with module structure
-- [ ] Add ehash crate to workspace `Cargo.toml`
+- [x] Create `common/ehash/Cargo.toml` with basic dependencies
+- [x] Create `common/ehash/src/lib.rs` with module structure
+- [x] Add ehash crate to workspace `Cargo.toml`
 - **Requirements**: 1.1, 4.1
 - **Files**: `common/ehash/Cargo.toml`, `common/ehash/src/lib.rs`, `Cargo.toml`
 
 ### 1.2 Add CDK dependencies
-- [ ] Add CDK mint and wallet dependencies to `common/ehash/Cargo.toml`
-- [ ] Add CDK re-exports to `common/ehash/src/lib.rs`
-- [ ] Verify CDK compiles with required features
+- [x] Add CDK mint and wallet dependencies to `common/ehash/Cargo.toml`
+- [x] Add CDK re-exports to `common/ehash/src/lib.rs`
+- [x] Verify CDK compiles with required features
 - **Requirements**: 4.1, 4.2
 - **Files**: `common/ehash/Cargo.toml`
 
 ### 1.3 Add hashpool ehash protocol dependencies
-- [ ] Add ehash protocol dependency from `deps/hashpool/protocols/ehash`
-- [ ] Re-export core hashpool functions (`calculate_ehash_amount`, `calculate_difficulty`)
-- [ ] Add basic documentation for hashpool integration
+- [x] Add ehash protocol dependency from `deps/hashpool/protocols/ehash`
+- [x] Re-export core hashpool functions (`calculate_ehash_amount`, `calculate_difficulty`)
+- [x] Add basic documentation for hashpool integration
 - **Requirements**: 1.1, 1.3
 - **Files**: `common/ehash/Cargo.toml`, `common/ehash/src/lib.rs`
+- **Note**: Implemented work calculation functions directly in `work.rs` instead of using external dependency to avoid binary_sv2/sv2 protocol complexity. Functions are functionally identical to hashpool implementation.
 
 ## Phase 2: Core Data Structures
 
 ### 2.1 Define EHashMintData structure
-- [ ] Create `common/ehash/src/types.rs` with `EHashMintData` struct
-- [ ] Add all required fields (share_hash, channel_id, user_identity, target, sequence_number, etc.)
-- [ ] Implement Clone and Debug traits
+- [x] Create `common/ehash/src/types.rs` with `EHashMintData` struct
+- [x] Add all required fields (share_hash, channel_id, user_identity, target, sequence_number, etc.)
+- [x] Implement Clone and Debug traits
 - **Requirements**: 1.2, 3.1
 - **Files**: `common/ehash/src/types.rs`
 
 ### 2.2 Add EHashMintData helper methods
-- [ ] Implement `calculate_ehash_amount(&self, min_leading_zeros: u32) -> Amount`
-- [ ] Add conversion from share hash bytes to hashpool format
-- [ ] Add timestamp and block_found accessors
+- [x] Implement `calculate_ehash_amount(&self, min_leading_zeros: u32) -> Amount`
+- [x] Add conversion from share hash bytes to hashpool format
+- [x] Add timestamp and block_found accessors
 - **Requirements**: 1.3, 3.2
 - **Files**: `common/ehash/src/types.rs`
 
 ### 2.3 Define WalletCorrelationData structure
-- [ ] Add `WalletCorrelationData` struct to `types.rs`
-- [ ] Include channel_id, sequence_number, user_identity, ehash_tokens_minted
-- [ ] Implement Clone and Debug traits
+- [x] Add `WalletCorrelationData` struct to `types.rs`
+- [x] Include channel_id, sequence_number, user_identity, ehash_tokens_minted
+- [x] Implement Clone and Debug traits
 - **Requirements**: 3.4
 - **Files**: `common/ehash/src/types.rs`
 
 ### 2.4 Define configuration structures
-- [ ] Create `common/ehash/src/config.rs` with `MintConfig` struct
-- [ ] Add `WalletConfig` struct with locking_pubkey support
-- [ ] Add `JdcEHashConfig` with mode enum (Mint/Wallet)
+- [x] Create `common/ehash/src/config.rs` with `MintConfig` struct
+- [x] Add `WalletConfig` struct with locking_pubkey support
+- [x] Add `JdcEHashConfig` with mode enum (Mint/Wallet)
 - **Requirements**: 5.1, 5.2, 5.3
 - **Files**: `common/ehash/src/config.rs`
 
 ### 2.5 Define error types
-- [ ] Create `common/ehash/src/error.rs` with `MintError` enum
-- [ ] Add `WalletError` enum
-- [ ] Implement Display and Error traits
+- [x] Create `common/ehash/src/error.rs` with `MintError` enum
+- [x] Add `WalletError` enum
+- [x] Implement Display and Error traits
 - **Requirements**: 4.2, 6.4
 - **Files**: `common/ehash/src/error.rs`
 
 ### 2.6 Add unit tests for data structures
-- [ ] Test EHashMintData creation and eHash calculation
-- [ ] Test WalletCorrelationData creation
-- [ ] Test configuration deserialization from TOML
+- [x] Test EHashMintData creation and eHash calculation
+- [x] Test WalletCorrelationData creation
+- [x] Test configuration deserialization from TOML
 - **Requirements**: 1.3, 3.2
 - **Files**: `common/ehash/src/types.rs`, `common/ehash/src/config.rs`
 

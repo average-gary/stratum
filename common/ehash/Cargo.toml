@@ -32,5 +32,8 @@ tracing = "0.1"
 # Error handling
 thiserror = "1"
 
+[dev-dependencies]
+toml = "0.8"
+
 [features]
 default = []
