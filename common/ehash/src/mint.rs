@@ -11,12 +11,14 @@ use crate::config::MintConfig;
 use crate::error::MintError;
 use crate::types::EHashMintData;
 use async_channel::{Receiver, Sender};
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 use cdk::amount::Amount;
 use cdk::mint::MintBuilder;
-use cdk::nuts::{CurrencyUnit, MintQuoteState, Proofs};
+use cdk::nuts::{CurrencyUnit, PaymentMethod, Proofs, PublicKey as CdkPublicKey};
 use cdk::Mint;
 use cdk_common::mint::MintQuote;
+use cdk_common::payment::PaymentIdentifier;
+use cdk_common::quote_id::QuoteId;
 use cdk_sqlite::mint::memory;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,8 +48,8 @@ pub struct MintHandler {
     config: MintConfig,
 
     /// Channel locking pubkey mapping for P2PK token creation
-    /// Maps channel_id -> PublicKey
-    channel_pubkeys: HashMap<u32, PublicKey>,
+    /// Maps channel_id -> CdkPublicKey (stored in CDK format for efficiency)
+    channel_pubkeys: HashMap<u32, CdkPublicKey>,
 }
 
 impl MintHandler {
@@ -177,9 +179,11 @@ impl MintHandler {
     ///
     /// # Arguments
     /// * `channel_id` - The channel identifier
-    /// * `pubkey` - The locking public key for P2PK token creation
-    pub fn register_channel_pubkey(&mut self, channel_id: u32, pubkey: PublicKey) {
-        self.channel_pubkeys.insert(channel_id, pubkey);
+    /// * `pubkey` - The locking public key for P2PK token creation (secp256k1 format from SV2)
+    pub fn register_channel_pubkey(&mut self, channel_id: u32, pubkey: Secp256k1PublicKey) {
+        // Convert once at registration time, not on every mint
+        let cdk_pubkey = CdkPublicKey::from(pubkey);
+        self.channel_pubkeys.insert(channel_id, cdk_pubkey);
     }
 
     /// Main processing loop for the mint thread
@@ -336,24 +340,72 @@ impl MintHandler {
         // Create MintQuote in PAID state
         // For eHash, we bypass the normal bolt11 payment flow
         // We directly create PAID quotes since shares are the "payment"
-        let quote_id = format!(
+        let quote_id_str = format!(
             "ehash_{}_{}",
             data.channel_id, data.sequence_number
         );
 
-        // Create quote using CDK's internal API
-        // TODO: This is a stub - actual implementation will need to:
-        // 1. Create a MintQuote with state=PAID
-        // 2. Store quote in database
-        // 3. Mint tokens with P2PK conditions if pubkey available
-        // 4. Return the minted proofs
+        // Use HASH unit for eHash tokens
+        let unit = CurrencyUnit::Custom("HASH".to_string());
 
-        tracing::warn!(
-            "P2PK token minting not fully implemented yet - quote {} created",
-            quote_id
+        // Get current timestamp
+        let current_time = data.timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create MintQuote using the constructor
+        // Quote is in PAID state when amount_paid > amount_issued
+        let quote = MintQuote::new(
+            Some(QuoteId::BASE64(quote_id_str.clone())),
+            format!(
+                "eHash tokens for channel {} sequence {}",
+                data.channel_id, data.sequence_number
+            ),
+            unit,
+            Some(amount),
+            current_time + 86400, // 24 hour expiry
+            PaymentIdentifier::CustomId(quote_id_str.clone()),
+            locking_pubkey, // Already in CDK format, no conversion needed
+            amount, // amount_paid = amount (quote is fully paid)
+            Amount::ZERO, // amount_issued = 0 (not yet issued)
+            PaymentMethod::Custom("stratum".to_string()), // Custom payment method for share-based payment
+            current_time,
+            vec![], // No incoming payments (shares are the payment)
+            vec![], // No issuances yet
         );
 
-        // Return empty proofs for now
+        // Store quote in database
+        // For now, we need to access the database through a transaction
+        // In Phase 3, we're just creating PAID quotes that wallets can redeem
+        let localstore = self.mint_instance.localstore();
+        let mut tx = localstore
+            .begin_transaction()
+            .await
+            .map_err(|e| MintError::DatabaseError(format!("Failed to start transaction: {}", e)))?;
+
+        tx.add_mint_quote(quote)
+            .await
+            .map_err(|e| MintError::DatabaseError(format!("Failed to store mint quote: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MintError::DatabaseError(format!("Failed to commit quote: {}", e)))?;
+
+        tracing::info!(
+            "Created PAID mint quote {} for {} eHash tokens",
+            quote_id_str,
+            amount
+        );
+
+        // For now, we return empty proofs as the actual blind signature
+        // minting requires the wallet to provide blinded messages
+        // The wallet will query this PAID quote and mint the tokens
+        // using the standard CDK mint protocol
+
+        // TODO: In task 3.4, we'll implement P2PK spending conditions
+        // by allowing the wallet to provide SpendingConditions during minting
+
         Ok(vec![])
     }
 

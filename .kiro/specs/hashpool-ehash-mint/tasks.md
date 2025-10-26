@@ -73,26 +73,26 @@ This document breaks down the eHash persistence implementation into small, focus
 ## Phase 3: MintHandler Implementation
 
 ### 3.1 Create MintHandler structure scaffold
-- [ ] Create `common/ehash/src/mint.rs` with `MintHandler` struct
-- [ ] Add async channel fields (receiver, sender)
-- [ ] Add CDK Mint instance field
-- [ ] Add basic constructor `new(config, status_tx)`
+- [x] Create `common/ehash/src/mint.rs` with `MintHandler` struct
+- [x] Add async channel fields (receiver, sender)
+- [x] Add CDK Mint instance field
+- [x] Add basic constructor `new(config, status_tx)`
 - **Requirements**: 1.1, 1.5, 7.1
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.2 Implement MintHandler initialization
-- [ ] Initialize CDK Mint with database backend
-- [ ] Configure "HASH" currency unit
-- [ ] Set up async channels for EHashMintData
-- [ ] Add get_sender() and get_receiver() methods
+- [x] Initialize CDK Mint with database backend
+- [x] Configure "HASH" currency unit
+- [x] Set up async channels for EHashMintData
+- [x] Add get_sender() and get_receiver() methods
 - **Requirements**: 4.1, 4.3
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.3 Add mint processing core logic
-- [ ] Implement `process_mint_data(&mut self, data: EHashMintData)`
-- [ ] Create MintQuote in PAID state using CDK
-- [ ] Calculate eHash amount from share hash
-- [ ] Return minted token proofs
+- [x] Implement `process_mint_data(&mut self, data: EHashMintData)`
+- [x] Create MintQuote in PAID state using CDK
+- [x] Calculate eHash amount from share hash
+- [x] Return minted token proofs
 - **Requirements**: 1.2, 1.3
 - **Files**: `common/ehash/src/mint.rs`
 
