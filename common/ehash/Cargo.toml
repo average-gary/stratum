@@ -15,6 +15,8 @@ keywords = ["stratum", "mining", "bitcoin", "cashu", "ecash"]
 # CDK - Cashu Development Kit
 cdk = { path = "../../deps/cdk/crates/cdk", features = ["mint", "wallet"] }
 cdk-common = { path = "../../deps/cdk/crates/cdk-common" }
+cdk-sqlite = { path = "../../deps/cdk/crates/cdk-sqlite" }
+cdk-signatory = { path = "../../deps/cdk/crates/cdk-signatory" }
 
 # Core async and channel dependencies
 async-channel = "1.8.0"
