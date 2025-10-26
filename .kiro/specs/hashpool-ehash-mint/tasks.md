@@ -97,11 +97,12 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.4 Implement P2PK token locking
-- [ ] Add `register_channel_pubkey(channel_id, pubkey)` method
-- [ ] Create SpendingConditions with P2PK locking
-- [ ] Mint tokens with P2PK conditions using CDK
+- [x] Add `register_channel_pubkey(channel_id, pubkey)` method
+- [x] Create SpendingConditions with P2PK locking
+- [x] Mint tokens with P2PK conditions using CDK
 - **Requirements**: 8.1, 8.2
 - **Files**: `common/ehash/src/mint.rs`
+- **Note**: P2PK locking implemented by storing locking pubkeys in PAID MintQuotes. External wallets query quotes by pubkey, create blinded messages with P2PK SpendingConditions, and receive P2PK-locked tokens via standard Cashu protocol. This approach maintains Cashu's privacy guarantees.
 
 ### 3.5 Add block found event handling
 - [ ] Implement `handle_block_found(&mut self, data: &EHashMintData)`

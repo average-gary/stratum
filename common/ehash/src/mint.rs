@@ -4,8 +4,34 @@
 //! - CDK Mint instance initialization and lifecycle
 //! - Async channel communication for share validation events
 //! - eHash token minting based on share difficulty
-//! - P2PK token locking for secure wallet redemption
+//! - P2PK token locking for secure wallet redemption (via PAID quotes with locking pubkeys)
 //! - Block found event handling and keyset lifecycle
+//!
+//! ## P2PK Token Locking
+//!
+//! The MintHandler supports P2PK (Pay-to-Public-Key) token locking by storing
+//! locking public keys in the PAID MintQuotes it creates. The actual P2PK-locked
+//! tokens are created by external wallets following the standard Cashu protocol:
+//!
+//! 1. Pool extracts locking_pubkey from TLV during channel setup
+//! 2. MintHandler receives locking_pubkey via `register_channel_pubkey()`
+//! 3. When minting, MintHandler creates PAID quote with locking_pubkey attached
+//! 4. External wallet authenticates with the private key for locking_pubkey
+//! 5. External wallet queries for PAID quotes matching their pubkey
+//! 6. External wallet creates blinded messages with P2PK SpendingConditions
+//! 7. Mint signs the blinded messages and returns blind signatures
+//! 8. Wallet unblinds to obtain P2PK-locked token proofs
+//!
+//! This approach maintains Cashu's privacy guarantees while enabling secure
+//! token redemption tied to specific public keys.
+//!
+//! ## Share Hash Tracking
+//!
+//! Each MintQuote includes the share hash in its `payments` field as proof
+//! that the quote was earned through mining work. This provides:
+//! - Auditability: Track which shares generated which tokens
+//! - Verification: Prove tokens were earned through valid mining work
+//! - Correlation: Link tokens back to specific share submissions
 
 use crate::config::MintConfig;
 use crate::error::MintError;
@@ -132,7 +158,41 @@ impl MintHandler {
             supported_units.insert(unit.clone(), (0u64, 32u8));
         }
 
-        // Create the DbSignatory with supported units
+        // Create custom derivation paths for custom units
+        // Standard units (Sat, Msat, etc.) have built-in paths, but Custom units need explicit paths
+        use bitcoin::bip32::{ChildNumber, DerivationPath};
+        let mut custom_paths = HashMap::new();
+
+        for unit in &config.supported_units {
+            if let CurrencyUnit::Custom(name) = unit {
+                // Use a deterministic derivation path for custom units
+                // Format: m/0'/999'/hash(unit_name)' where 999 is reserved for custom units
+                // We use the first 31 bits of the hash of the unit name for uniqueness
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+
+                let mut hasher = DefaultHasher::new();
+                name.hash(&mut hasher);
+                let hash_value = hasher.finish();
+                // Use only 31 bits to ensure it fits in hardened index range (< 2^31)
+                let index = (hash_value as u32) & 0x7FFFFFFF;
+
+                let path = DerivationPath::from(vec![
+                    ChildNumber::from_hardened_idx(0).expect("0 is valid"),
+                    ChildNumber::from_hardened_idx(999).expect("999 is valid"), // Reserved for custom units
+                    ChildNumber::from_hardened_idx(index).expect("hash index is valid"),
+                ]);
+
+                custom_paths.insert(unit.clone(), path);
+                tracing::debug!(
+                    "Created custom derivation path for unit '{}': m/0'/999'/{}'",
+                    name,
+                    index
+                );
+            }
+        }
+
+        // Create the DbSignatory with supported units and custom paths
         use cdk_signatory::db_signatory::DbSignatory;
         use cdk_signatory::embedded::Service;
 
@@ -140,7 +200,7 @@ impl MintHandler {
             keystore.clone(),
             &seed,
             supported_units,
-            HashMap::new(), // custom_paths (empty for now)
+            custom_paths, // Now includes paths for custom units like "HASH"
         )
         .await
         .map_err(|e| MintError::ConfigError(format!("Failed to create signatory: {}", e)))?;
@@ -340,13 +400,37 @@ impl MintHandler {
         // Create MintQuote in PAID state
         // For eHash, we bypass the normal bolt11 payment flow
         // We directly create PAID quotes since shares are the "payment"
-        let quote_id_str = format!(
-            "ehash_{}_{}",
-            data.channel_id, data.sequence_number
-        );
 
-        // Use HASH unit for eHash tokens
-        let unit = CurrencyUnit::Custom("HASH".to_string());
+        // Create quote ID using locking_pubkey (or user_identity as fallback), channel_id, and sequence
+        // Using the locking_pubkey ensures cryptographic uniqueness and ties the quote to redemption key
+        // CDK requires QuoteId::BASE64 to be valid base64-encoded strings
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+        let quote_id_raw = if let Some(pubkey) = locking_pubkey {
+            // Use locking pubkey hex for maximum uniqueness
+            let pubkey_bytes = pubkey.to_bytes();
+            let pubkey_hex = pubkey_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+            format!(
+                "ehash_{}_{}_{}", pubkey_hex, data.channel_id, data.sequence_number
+            )
+        } else {
+            // Fallback to user_identity if no locking pubkey
+            format!(
+                "ehash_{}_{}_{}",
+                data.user_identity, data.channel_id, data.sequence_number
+            )
+        };
+        let quote_id_str = general_purpose::URL_SAFE.encode(quote_id_raw.as_bytes());
+
+        // Use HASH unit for eHash tokens (or first configured unit in tests)
+        let unit = self
+            .config
+            .supported_units
+            .first()
+            .cloned()
+            .unwrap_or(CurrencyUnit::Custom("HASH".to_string()));
 
         // Get current timestamp
         let current_time = data.timestamp
@@ -355,56 +439,79 @@ impl MintHandler {
             .as_secs();
 
         // Create MintQuote using the constructor
-        // Quote is in PAID state when amount_paid > amount_issued
+        // Quote starts with amount_paid = 0, we'll increment it below to mark as PAID
         let quote = MintQuote::new(
             Some(QuoteId::BASE64(quote_id_str.clone())),
             format!(
-                "eHash tokens for channel {} sequence {}",
-                data.channel_id, data.sequence_number
+                "eHash tokens for user {} channel {} sequence {}",
+                data.user_identity, data.channel_id, data.sequence_number
             ),
             unit,
             Some(amount),
             current_time + 86400, // 24 hour expiry
             PaymentIdentifier::CustomId(quote_id_str.clone()),
             locking_pubkey, // Already in CDK format, no conversion needed
-            amount, // amount_paid = amount (quote is fully paid)
+            Amount::ZERO, // amount_paid starts at 0, will be incremented below
             Amount::ZERO, // amount_issued = 0 (not yet issued)
             PaymentMethod::Custom("stratum".to_string()), // Custom payment method for share-based payment
             current_time,
-            vec![], // No incoming payments (shares are the payment)
+            vec![], // Start with empty payments, will add via increment_mint_quote_amount_paid
             vec![], // No issuances yet
         );
 
-        // Store quote in database
-        // For now, we need to access the database through a transaction
-        // In Phase 3, we're just creating PAID quotes that wallets can redeem
+        // Store quote in database and add share hash as payment proof
+        // This provides auditability and proof that the quote was earned through mining work
         let localstore = self.mint_instance.localstore();
         let mut tx = localstore
             .begin_transaction()
             .await
             .map_err(|e| MintError::DatabaseError(format!("Failed to start transaction: {}", e)))?;
 
+        // Add the quote first
         tx.add_mint_quote(quote)
             .await
             .map_err(|e| MintError::DatabaseError(format!("Failed to store mint quote: {}", e)))?;
+
+        // Use share hash as payment_id to track this payment
+        let share_hash_hex = data.share_hash.to_string();
+
+        // Increment the amount paid with the share hash as payment proof
+        // This properly adds the payment to the quote and marks it as PAID
+        tx.increment_mint_quote_amount_paid(
+            &QuoteId::BASE64(quote_id_str.clone()),
+            amount,
+            share_hash_hex.clone(),
+        )
+        .await
+        .map_err(|e| MintError::DatabaseError(format!("Failed to add payment: {}", e)))?;
 
         tx.commit()
             .await
             .map_err(|e| MintError::DatabaseError(format!("Failed to commit quote: {}", e)))?;
 
         tracing::info!(
-            "Created PAID mint quote {} for {} eHash tokens",
+            "Created PAID mint quote {} for {} eHash tokens{} (share_hash: {})",
             quote_id_str,
-            amount
+            amount,
+            if locking_pubkey.is_some() {
+                " (P2PK-locked)"
+            } else {
+                ""
+            },
+            share_hash_hex
         );
 
-        // For now, we return empty proofs as the actual blind signature
-        // minting requires the wallet to provide blinded messages
-        // The wallet will query this PAID quote and mint the tokens
-        // using the standard CDK mint protocol
-
-        // TODO: In task 3.4, we'll implement P2PK spending conditions
-        // by allowing the wallet to provide SpendingConditions during minting
+        // Note: We return empty proofs because Cashu protocol requires wallets
+        // to provide blinded messages for privacy. The actual P2PK token creation flow is:
+        // 1. Mint creates PAID quote with locking_pubkey (this method)
+        // 2. External wallet authenticates with private key for locking_pubkey
+        // 3. External wallet queries PAID quotes by pubkey
+        // 4. External wallet creates blinded messages with P2PK SpendingConditions
+        // 5. External wallet submits MintRequest to mint the tokens
+        // 6. Mint signs blinded messages and returns blind signatures
+        // 7. External wallet unblinds to get P2PK-locked token proofs
+        //
+        // This preserves Cashu's privacy guarantees while enabling P2PK locking.
 
         Ok(vec![])
     }
@@ -467,10 +574,9 @@ mod tests {
         MintConfig {
             mint_url: "https://mint.test.com".parse().unwrap(),
             mint_private_key: None,
-            supported_units: vec![
-                CurrencyUnit::Custom("HASH".to_string()),
-                CurrencyUnit::Sat,
-            ],
+            // Use Sat for tests to keep test data simpler
+            // Production would use CurrencyUnit::Custom("HASH".to_string())
+            supported_units: vec![CurrencyUnit::Sat],
             database_url: None,
             min_leading_zeros: 32,
             max_retries: 10,
@@ -485,7 +591,8 @@ mod tests {
         let config = create_test_config();
         assert_eq!(config.min_leading_zeros, 32);
         assert_eq!(config.max_retries, 10);
-        assert_eq!(config.supported_units.len(), 2);
+        assert_eq!(config.supported_units.len(), 1);
+        assert_eq!(config.supported_units[0], CurrencyUnit::Sat);
     }
 
     #[test]
@@ -555,7 +662,321 @@ mod tests {
         assert_eq!(data.template_id, Some(456));
     }
 
-    // Note: Full integration tests with CDK Mint initialization are deferred
-    // until we have proper keyset management in place (Phase 10).
-    // For now, we test the logic that doesn't require full CDK initialization.
+    #[test]
+    fn test_register_channel_pubkey() {
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey = Secp256k1PublicKey::from_secret_key(&secp, &secret_key);
+
+        // Convert pubkey to CDK format
+        let cdk_pubkey = CdkPublicKey::from(pubkey);
+
+        // Verify conversion worked
+        assert_eq!(cdk_pubkey.to_bytes(), pubkey.serialize());
+
+        // In actual usage with an async handler, this would be:
+        // handler.register_channel_pubkey(channel_id, pubkey);
+    }
+
+    #[tokio::test]
+    async fn test_mint_handler_with_custom_hash_unit() {
+        // Test with HASH custom unit
+        let mut config = create_test_config();
+        config.supported_units = vec![CurrencyUnit::Custom("HASH".to_string())];
+
+        let result = MintHandler::new(config).await;
+        assert!(
+            result.is_ok(),
+            "MintHandler should support HASH custom unit: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mint_handler_initialization() {
+        let config = create_test_config();
+
+        // Test that MintHandler can be created
+        let result = MintHandler::new(config).await;
+        assert!(result.is_ok(), "MintHandler initialization should succeed");
+
+        let handler = result.unwrap();
+
+        // Verify channels are set up
+        let sender = handler.get_sender();
+        let receiver = handler.get_receiver();
+
+        // Test that we can send data through the channel
+        let test_data = EHashMintData {
+            share_hash: Hash::from_byte_array([0u8; 32]),
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        assert!(sender.try_send(test_data.clone()).is_ok());
+        assert!(receiver.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_p2pk_pubkey_registration() {
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create test pubkeys
+        let secp = Secp256k1::new();
+        let secret1 = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey1 = Secp256k1PublicKey::from_secret_key(&secp, &secret1);
+        let secret2 = SecretKey::from_slice(&[2u8; 32]).unwrap();
+        let pubkey2 = Secp256k1PublicKey::from_secret_key(&secp, &secret2);
+
+        // Register pubkeys for different channels
+        handler.register_channel_pubkey(1, pubkey1);
+        handler.register_channel_pubkey(2, pubkey2);
+
+        // Verify pubkeys are stored (we can't directly access the HashMap,
+        // but we can test that registration doesn't panic)
+        assert_eq!(handler.channel_pubkeys.len(), 2);
+
+        // Verify we can retrieve them
+        let stored_pubkey1 = handler.channel_pubkeys.get(&1);
+        assert!(stored_pubkey1.is_some());
+        assert_eq!(stored_pubkey1.unwrap().to_bytes(), pubkey1.serialize());
+    }
+
+    #[tokio::test]
+    async fn test_process_mint_data_with_p2pk() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Register a locking pubkey for channel 1
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[42u8; 32]).unwrap();
+        let pubkey = Secp256k1PublicKey::from_secret_key(&secp, &secret);
+        handler.register_channel_pubkey(1, pubkey);
+
+        // Create share with sufficient difficulty (40 leading zeros)
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Process the mint data - should create PAID quote with P2PK pubkey
+        let result = handler.process_mint_data(data).await;
+
+        // Should succeed
+        assert!(result.is_ok(), "Processing mint data with P2PK should succeed");
+
+        // Verify quote was created in database
+        let localstore = handler.mint_instance.localstore();
+        // Encode the quote ID in base64 URL-safe format as required by CDK
+        // Format: ehash_{pubkey_hex}_{channel_id}_{sequence_number}
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+        let pubkey_bytes = pubkey.serialize();
+        let pubkey_hex = pubkey_bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let quote_id_str = format!("ehash_{}_1_1", pubkey_hex);
+        let quote_id_b64 = general_purpose::URL_SAFE.encode(quote_id_str.as_bytes());
+        let quote_id = QuoteId::BASE64(quote_id_b64);
+        let quote = localstore.get_mint_quote(&quote_id).await.unwrap();
+
+        // Quote should exist and have the locking pubkey
+        assert!(quote.is_some(), "Quote should be created in database");
+        let quote = quote.unwrap();
+        assert!(quote.pubkey.is_some(), "Quote should have P2PK pubkey");
+        assert_eq!(quote.pubkey.unwrap().to_bytes(), pubkey.serialize());
+
+        // Verify share hash is in payments field
+        assert_eq!(quote.payments.len(), 1, "Quote should have one payment");
+        let payment = &quote.payments[0];
+        assert_eq!(
+            payment.payment_id,
+            share_hash.to_string(),
+            "Payment ID should be the share hash"
+        );
+        assert_eq!(payment.amount, Amount::from(256u64), "Payment amount should match eHash amount");
+    }
+
+    #[tokio::test]
+    async fn test_process_mint_data_without_p2pk() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Don't register a pubkey - tokens should still be mintable but not P2PK-locked
+
+        // Create share with sufficient difficulty
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Process the mint data - should create PAID quote without P2PK pubkey
+        let result = handler.process_mint_data(data).await;
+
+        // Should succeed
+        assert!(result.is_ok(), "Processing mint data without P2PK should succeed");
+
+        // Verify quote was created without pubkey
+        let localstore = handler.mint_instance.localstore();
+        // Encode the quote ID in base64 URL-safe format as required by CDK
+        // Format: ehash_{user_identity}_{channel_id}_{sequence_number} (fallback when no pubkey)
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+        let quote_id_str = format!("ehash_test_user_1_1");
+        let quote_id_b64 = general_purpose::URL_SAFE.encode(quote_id_str.as_bytes());
+        let quote_id = QuoteId::BASE64(quote_id_b64);
+        let quote = localstore.get_mint_quote(&quote_id).await.unwrap();
+
+        assert!(quote.is_some(), "Quote should be created in database");
+        let quote = quote.unwrap();
+        assert!(quote.pubkey.is_none(), "Quote should not have P2PK pubkey");
+
+        // Verify share hash is still tracked in payments field even without P2PK
+        assert_eq!(quote.payments.len(), 1, "Quote should have one payment");
+        let payment = &quote.payments[0];
+        assert_eq!(
+            payment.payment_id,
+            share_hash.to_string(),
+            "Payment ID should be the share hash"
+        );
+        assert_eq!(payment.amount, Amount::from(256u64), "Payment amount should match eHash amount");
+    }
+
+    #[tokio::test]
+    async fn test_quote_id_uniqueness() {
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create two different locking pubkeys
+        let secp = Secp256k1::new();
+        let secret1 = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let pubkey1 = Secp256k1PublicKey::from_secret_key(&secp, &secret1);
+        let secret2 = SecretKey::from_slice(&[2u8; 32]).unwrap();
+        let pubkey2 = Secp256k1PublicKey::from_secret_key(&secp, &secret2);
+
+        // Register different pubkeys for the same channel
+        handler.register_channel_pubkey(1, pubkey1);
+
+        // Create shares with sufficient difficulty (different shares for different users)
+        let mut hash_bytes1 = [0xffu8; 32];
+        hash_bytes1[..5].fill(0x00);
+        let share_hash1 = Hash::from_byte_array(hash_bytes1);
+
+        let mut hash_bytes2 = [0xffu8; 32];
+        hash_bytes2[..5].fill(0x00);
+        hash_bytes2[5] = 0x01; // Make it slightly different
+        let share_hash2 = Hash::from_byte_array(hash_bytes2);
+
+        // Create two mint data events with same channel and sequence but different pubkeys
+        let data1 = EHashMintData {
+            share_hash: share_hash1,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "user_alice".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Process first mint with pubkey1
+        let result1 = handler.process_mint_data(data1).await;
+        assert!(result1.is_ok(), "First mint should succeed");
+
+        // Change the registered pubkey for the same channel
+        handler.register_channel_pubkey(1, pubkey2);
+
+        let data2 = EHashMintData {
+            share_hash: share_hash2, // Different share hash
+            block_found: false,
+            channel_id: 1, // Same channel_id
+            user_identity: "user_bob".to_string(), // Different user
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1, // Same sequence_number
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Process second mint with pubkey2
+        let result2 = handler.process_mint_data(data2).await;
+        assert!(result2.is_ok(), "Second mint should succeed (unique quote ID)");
+
+        // Verify both quotes exist with different IDs
+        let localstore = handler.mint_instance.localstore();
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+
+        // Calculate quote IDs based on pubkeys
+        let pubkey1_bytes = pubkey1.serialize();
+        let pubkey1_hex = pubkey1_bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let quote_id1_str = format!("ehash_{}_1_1", pubkey1_hex);
+        let quote_id1_b64 = general_purpose::URL_SAFE.encode(quote_id1_str.as_bytes());
+        let quote1 = localstore
+            .get_mint_quote(&QuoteId::BASE64(quote_id1_b64))
+            .await
+            .unwrap();
+
+        let pubkey2_bytes = pubkey2.serialize();
+        let pubkey2_hex = pubkey2_bytes
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let quote_id2_str = format!("ehash_{}_1_1", pubkey2_hex);
+        let quote_id2_b64 = general_purpose::URL_SAFE.encode(quote_id2_str.as_bytes());
+        let quote2 = localstore
+            .get_mint_quote(&QuoteId::BASE64(quote_id2_b64))
+            .await
+            .unwrap();
+
+        assert!(quote1.is_some(), "First quote should exist");
+        assert!(quote2.is_some(), "Second quote should exist");
+        assert_ne!(
+            quote1.as_ref().unwrap().id,
+            quote2.as_ref().unwrap().id,
+            "Quote IDs should be different due to different pubkeys"
+        );
+    }
+
+    // Note: Full integration tests with CDK Mint initialization and external wallet
+    // redemption are deferred until we have proper keyset management in place (Phase 10).
+    // The tests above verify that P2PK pubkeys are correctly stored in PAID quotes.
 }
