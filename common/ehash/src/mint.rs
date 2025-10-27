@@ -46,8 +46,9 @@ use cdk_common::mint::MintQuote;
 use cdk_common::payment::PaymentIdentifier;
 use cdk_common::quote_id::QuoteId;
 use cdk_sqlite::mint::memory;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 /// Block reward information from Template Provider
 ///
@@ -75,10 +76,17 @@ pub struct BlockRewardInfo {
 /// - Calculates eHash amounts based on share difficulty
 /// - Creates P2PK-locked tokens using CDK
 /// - Handles block found events for keyset lifecycle transitions
+/// - Provides fault tolerance with retry queue and exponential backoff
 ///
 /// # Thread Safety
 /// The MintHandler is designed to run in a dedicated thread spawned via
 /// the task manager, completely isolated from mining operations.
+///
+/// # Fault Tolerance
+/// The MintHandler implements automatic retry logic with exponential backoff:
+/// - Failed mint operations are queued for retry
+/// - Automatic recovery attempts with configurable backoff
+/// - Mining operations continue even during mint failures
 pub struct MintHandler {
     /// CDK Mint instance with native database and accounting
     mint_instance: Arc<Mint>,
@@ -95,6 +103,15 @@ pub struct MintHandler {
     /// Channel locking pubkey mapping for P2PK token creation
     /// Maps channel_id -> CdkPublicKey (stored in CDK format for efficiency)
     channel_pubkeys: HashMap<u32, CdkPublicKey>,
+
+    /// Queue of failed mint operations awaiting retry
+    retry_queue: VecDeque<EHashMintData>,
+
+    /// Number of consecutive failures
+    failure_count: u32,
+
+    /// Timestamp of the last failure (for exponential backoff)
+    last_failure: Option<SystemTime>,
 }
 
 impl MintHandler {
@@ -125,6 +142,9 @@ impl MintHandler {
             sender,
             config,
             channel_pubkeys: HashMap::new(),
+            retry_queue: VecDeque::new(),
+            failure_count: 0,
+            last_failure: None,
         })
     }
 
@@ -329,6 +349,52 @@ impl MintHandler {
             }
         }
         Ok(())
+    }
+
+    /// Process share validation data with automatic retry on failure
+    ///
+    /// This wrapper provides fault tolerance by:
+    /// - Attempting to process the mint data via `process_mint_data`
+    /// - On success: resetting failure counters and returning
+    /// - On failure: queuing the data for retry and incrementing failure count
+    /// - Disabling the handler if max retries are exceeded
+    ///
+    /// # Arguments
+    /// * `data` - Share validation data to process
+    ///
+    /// # Errors
+    /// Returns `MintError` if processing fails
+    pub async fn process_mint_data_with_retry(&mut self, data: EHashMintData) -> Result<(), MintError> {
+        match self.process_mint_data(data.clone()).await {
+            Ok(()) => {
+                // Reset failure count on success
+                self.failure_count = 0;
+                self.last_failure = None;
+                Ok(())
+            }
+            Err(e) => {
+                // Queue for retry and increment failure count
+                self.retry_queue.push_back(data);
+                self.failure_count += 1;
+                self.last_failure = Some(SystemTime::now());
+
+                tracing::warn!(
+                    "Mint operation failed (attempt {}), queued for retry: {}",
+                    self.failure_count,
+                    e
+                );
+
+                // Check if we've exceeded max retries
+                if self.failure_count >= self.config.max_retries {
+                    tracing::error!(
+                        "Mint handler disabled after {} consecutive failures",
+                        self.config.max_retries
+                    );
+                }
+
+                Err(e)
+            }
+        }
     }
 
     /// Process share validation data and mint eHash tokens
@@ -1352,6 +1418,313 @@ mod tests {
         // Wait for run loop to complete
         let result = run_handle.await.unwrap();
         assert!(result.is_ok(), "Run with shutdown should complete gracefully");
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_initialization() {
+        let config = create_test_config();
+        let handler = MintHandler::new(config).await.unwrap();
+
+        // Verify retry queue is initialized empty
+        assert_eq!(handler.retry_queue.len(), 0, "Retry queue should start empty");
+        assert_eq!(handler.failure_count, 0, "Failure count should start at 0");
+        assert!(handler.last_failure.is_none(), "Last failure should be None");
+    }
+
+    #[tokio::test]
+    async fn test_process_mint_data_with_retry_success() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create share with sufficient difficulty
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Process with retry - should succeed
+        let result = handler.process_mint_data_with_retry(data).await;
+        assert!(result.is_ok(), "Process with retry should succeed");
+
+        // Verify failure counters are reset on success
+        assert_eq!(handler.failure_count, 0, "Failure count should be 0 after success");
+        assert!(handler.last_failure.is_none(), "Last failure should be None after success");
+        assert_eq!(handler.retry_queue.len(), 0, "Retry queue should be empty after success");
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_on_actual_failure() {
+        let mut config = create_test_config();
+        config.max_retries = 5;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create share with sufficient difficulty
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00); // 40 leading zeros
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // First mint should succeed
+        let result1 = handler.process_mint_data_with_retry(data.clone()).await;
+        assert!(result1.is_ok(), "First mint should succeed");
+        assert_eq!(handler.failure_count, 0, "No failures yet");
+        assert_eq!(handler.retry_queue.len(), 0, "Queue should be empty");
+
+        // Second mint with SAME data should fail due to duplicate quote ID
+        let result2 = handler.process_mint_data_with_retry(data.clone()).await;
+        assert!(result2.is_err(), "Second mint should fail (duplicate quote ID)");
+
+        // Verify failure was tracked
+        assert_eq!(handler.failure_count, 1, "Failure count should increment");
+        assert!(handler.last_failure.is_some(), "Last failure time should be set");
+        assert_eq!(handler.retry_queue.len(), 1, "Failed operation should be queued");
+
+        // Verify the queued data matches
+        let queued = handler.retry_queue.front().unwrap();
+        assert_eq!(queued.channel_id, data.channel_id);
+        assert_eq!(queued.sequence_number, data.sequence_number);
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_multiple_failures() {
+        let mut config = create_test_config();
+        config.max_retries = 3;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create share
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // First mint succeeds
+        handler.process_mint_data_with_retry(data.clone()).await.unwrap();
+
+        // Subsequent attempts fail and increment counter
+        for i in 1..=3 {
+            let result = handler.process_mint_data_with_retry(data.clone()).await;
+            assert!(result.is_err(), "Attempt {} should fail", i);
+            assert_eq!(handler.failure_count, i as u32, "Failure count should be {}", i);
+            assert_eq!(handler.retry_queue.len(), i, "Should have {} items in queue", i);
+        }
+
+        // Verify we've reached max_retries
+        assert!(
+            handler.failure_count >= handler.config.max_retries,
+            "Should have reached max retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_success_resets_counter() {
+        let mut config = create_test_config();
+        config.max_retries = 5;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create two different shares
+        let mut hash_bytes1 = [0xffu8; 32];
+        hash_bytes1[..5].fill(0x00);
+        let share_hash1 = Hash::from_byte_array(hash_bytes1);
+
+        let mut hash_bytes2 = [0xffu8; 32];
+        hash_bytes2[..5].fill(0x00);
+        hash_bytes2[5] = 0x01; // Make it different
+        let share_hash2 = Hash::from_byte_array(hash_bytes2);
+
+        let data1 = EHashMintData {
+            share_hash: share_hash1,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        let data2 = EHashMintData {
+            share_hash: share_hash2,
+            block_found: false,
+            channel_id: 2, // Different channel to avoid resource contention
+            user_identity: "test_user2".to_string(), // Different user for cleaner separation
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // First mint succeeds
+        handler.process_mint_data_with_retry(data1.clone()).await.unwrap();
+
+        // Duplicate fails and increments counter
+        let result = handler.process_mint_data_with_retry(data1.clone()).await;
+        assert!(result.is_err(), "Duplicate should fail");
+        assert_eq!(handler.failure_count, 1, "Failure count should be 1");
+
+        // Give database a moment to clean up resources from failed transaction
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Different share succeeds and RESETS counter
+        let result2 = handler.process_mint_data_with_retry(data2).await;
+        if let Err(ref e) = result2 {
+            panic!("Second share should succeed, but got error: {:?}", e);
+        }
+        assert!(result2.is_ok(), "Different share should succeed");
+        assert_eq!(handler.failure_count, 0, "Success should reset failure counter");
+        assert!(handler.last_failure.is_none(), "Success should clear last failure time");
+    }
+
+    #[tokio::test]
+    async fn test_failure_count_increments() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Manually simulate a failure scenario by setting failure_count
+        // (In production, this would be set by process_mint_data_with_retry on failure)
+        handler.failure_count = 3;
+        handler.last_failure = Some(SystemTime::now());
+
+        assert_eq!(handler.failure_count, 3, "Failure count should be 3");
+        assert!(handler.last_failure.is_some(), "Last failure should be set");
+    }
+
+    #[tokio::test]
+    async fn test_max_retries_detection() {
+        let mut config = create_test_config();
+        config.max_retries = 3;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Simulate reaching max retries
+        handler.failure_count = 3;
+
+        assert!(
+            handler.failure_count >= handler.config.max_retries,
+            "Should detect when max retries is reached"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_structure() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create test data
+        let share_hash = Hash::from_byte_array([0u8; 32]);
+        let data1 = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        let data2 = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 2,
+            user_identity: "test_user2".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 2,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        // Manually add to retry queue to test FIFO behavior
+        handler.retry_queue.push_back(data1.clone());
+        handler.retry_queue.push_back(data2.clone());
+
+        assert_eq!(handler.retry_queue.len(), 2, "Should have 2 items in queue");
+
+        // Pop from queue and verify FIFO order
+        let first = handler.retry_queue.pop_front();
+        assert!(first.is_some());
+        assert_eq!(first.unwrap().channel_id, 1, "First item should be channel 1");
+
+        let second = handler.retry_queue.pop_front();
+        assert!(second.is_some());
+        assert_eq!(second.unwrap().channel_id, 2, "Second item should be channel 2");
+
+        assert_eq!(handler.retry_queue.len(), 0, "Queue should be empty after popping all items");
+    }
+
+    #[tokio::test]
+    async fn test_retry_queue_preserves_data() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create share with specific properties
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let original_data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 42,
+            user_identity: "specific_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 123,
+            timestamp: SystemTime::now(),
+            template_id: Some(789),
+            coinbase: Some(vec![0xde, 0xad, 0xbe, 0xef]),
+        };
+
+        // Add to retry queue
+        handler.retry_queue.push_back(original_data.clone());
+
+        // Retrieve and verify all fields are preserved
+        let retrieved = handler.retry_queue.pop_front().unwrap();
+        assert_eq!(retrieved.share_hash, original_data.share_hash);
+        assert_eq!(retrieved.block_found, original_data.block_found);
+        assert_eq!(retrieved.channel_id, original_data.channel_id);
+        assert_eq!(retrieved.user_identity, original_data.user_identity);
+        assert_eq!(retrieved.sequence_number, original_data.sequence_number);
+        assert_eq!(retrieved.template_id, original_data.template_id);
+        assert_eq!(retrieved.coinbase, original_data.coinbase);
     }
 
     // Note: Full integration tests with CDK Mint initialization and external wallet

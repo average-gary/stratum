@@ -119,9 +119,10 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.7 Add fault tolerance - retry queue
-- [ ] Add retry_queue field to MintHandler
-- [ ] Add failure_count and last_failure tracking
-- [ ] Implement `process_mint_data_with_retry` wrapper
+- [x] Add retry_queue field to MintHandler
+- [x] Add failure_count and last_failure tracking
+- [x] Implement `process_mint_data_with_retry` wrapper
+- [x] Add unit tests for retry queue functionality
 - **Requirements**: 6.1, 6.3
 - **Files**: `common/ehash/src/mint.rs`
 
