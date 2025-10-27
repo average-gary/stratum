@@ -112,7 +112,11 @@ This feature implements hashpool.dev, a system that integrates Cashu ecash minti
 
 #### Acceptance Criteria
 
-1. WHEN the Mint receives a ShareAccountingEvent with block_found=true THEN it SHALL query the Template Provider for block reward details and transition the active keyset to QUANTIFYING state
+1. WHEN the Mint receives a ShareAccountingEvent with block_found=true THEN it SHALL query Bitcoin Core via RPC for block reward details and transition the active keyset to QUANTIFYING state
+   - **Implementation Note**: Use Bitcoin Core RPC `getblock` method with verbosity=2 to fetch full block data including coinbase transaction and fees
+   - **Configuration**: Mint SHALL support configurable Bitcoin RPC endpoint, authentication credentials, and timeout settings
+   - **Block Hash**: Use EHashMintData.share_hash directly as block hash (when block_found=true, share_hash IS the block hash)
+   - **Block Data**: Call getblock(share_hash, 2), parse coinbase transaction output value, and calculate total transaction fees
 2. WHEN the Mint detects a BOLT12 payment via LDK integration THEN it SHALL verify the payment is for mining rewards and transition the active keyset to QUANTIFYING state
 3. WHEN a keyset transitions to QUANTIFYING state THEN the Mint SHALL create a new ACTIVE keyset first to ensure continuous eHash minting capability
 4. WHEN quantification is complete THEN the Mint SHALL automatically transition the keyset to PAYOUT state with the calculated conversion rate

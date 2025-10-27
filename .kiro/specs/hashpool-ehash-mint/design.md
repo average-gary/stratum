@@ -504,18 +504,24 @@ pub struct MintConfig {
     pub mint_url: MintUrl,  // cdk::mint_url::MintUrl
     pub mint_private_key: Option<String>,  // For cdk::Mint initialization
     pub supported_units: Vec<CurrencyUnit>,  // cdk::nuts::CurrencyUnit (Sat, Msat, custom units)
-    
+
     // CDK database configuration - for cdk::cdk_database::MintDatabase
     pub database_url: Option<String>,  // For CDK database backends (sqlite, postgres, redb)
-    
-    // Payment logic (hashpool-specific) 
+
+    // Payment logic (hashpool-specific)
     pub min_leading_zeros: u32,  // Minimum leading zero bits required to earn 1 unit of ehash (hashpool default: 32)
-    
+
+    // Bitcoin RPC configuration (Phase 10) - for querying block reward data
+    pub bitcoin_rpc_url: Option<String>,  // Bitcoin Core RPC endpoint (e.g., "http://127.0.0.1:8332")
+    pub bitcoin_rpc_user: Option<String>,  // RPC authentication username
+    pub bitcoin_rpc_password: Option<String>,  // RPC authentication password
+    pub bitcoin_rpc_timeout_secs: Option<u64>,  // RPC call timeout in seconds (default: 30)
+
     // Fault tolerance configuration
     pub max_retries: Option<u32>,  // Maximum retry attempts before disabling (default: 10)
     pub backoff_multiplier: Option<u64>,  // Backoff multiplier in seconds (default: 2)
     pub recovery_enabled: Option<bool>,  // Enable automatic recovery (default: true)
-    
+
     // Integration with existing Stratum v2 config
     pub log_level: Option<String>,
 }
@@ -1342,13 +1348,35 @@ pub fn decode_locking_pubkey(encoded: &str) -> Result<PublicKey, EncodingError> 
 }
 ```
 
-### Configuration Example
+### Configuration Examples
 
+#### TProxy Configuration
 ```toml
 # TProxy configuration
 [ehash]
 locking_pubkey = "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 mint_url = "https://mint.hashpool.dev"
+```
+
+#### Pool/Mint Configuration (Phase 10 - with Bitcoin RPC)
+```toml
+# Pool configuration with eHash mint
+[ehash_mint]
+mint_url = "https://mint.hashpool.dev"
+supported_units = ["HASH"]
+min_leading_zeros = 32
+database_url = "sqlite://ehash_mint.db"
+
+# Bitcoin RPC configuration for block reward querying (Phase 10)
+bitcoin_rpc_url = "http://127.0.0.1:8332"
+bitcoin_rpc_user = "bitcoinrpc"
+bitcoin_rpc_password = "your_rpc_password_here"
+bitcoin_rpc_timeout_secs = 30
+
+# Fault tolerance
+max_retries = 10
+backoff_multiplier = 2
+recovery_enabled = true
 ```
 
 ### Benefits
@@ -1357,3 +1385,4 @@ mint_url = "https://mint.hashpool.dev"
 - **Distinctive prefix**: 'hpub' clearly identifies hashpool locking pubkeys
 - **Standard format**: Consistent with Bitcoin address encoding practices
 - **Error detection**: Built-in checksum validation
+- **Flexible RPC**: Supports both local and remote Bitcoin Core nodes

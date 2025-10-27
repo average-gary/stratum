@@ -49,6 +49,25 @@ use cdk_sqlite::mint::memory;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Block reward information from Template Provider
+///
+/// This structure represents block reward details used for
+/// calculating eHash-to-sats conversion rates during keyset
+/// lifecycle transitions.
+#[derive(Debug, Clone)]
+pub struct BlockRewardInfo {
+    /// Block height for this reward
+    pub height: u64,
+    /// Total reward in satoshis (coinbase + fees)
+    pub total_reward_sats: u64,
+    /// Coinbase reward in satoshis
+    pub coinbase_reward_sats: u64,
+    /// Transaction fees in satoshis
+    pub fees_sats: u64,
+    /// Template ID that produced this block
+    pub template_id: u64,
+}
+
 /// Handler for eHash token minting operations
 ///
 /// The MintHandler manages all aspects of eHash token creation:
@@ -519,9 +538,10 @@ impl MintHandler {
     /// Handle block found events and trigger keyset lifecycle
     ///
     /// When a share finds a block:
-    /// - Query Template Provider for block reward
-    /// - Trigger keyset lifecycle transitions
-    /// - Calculate eHash to sats conversion rate
+    /// - Mint eHash tokens for the block-finding share
+    /// - Query Template Provider for block reward details (stub)
+    /// - Trigger keyset lifecycle transitions (deferred to Phase 10)
+    /// - Calculate eHash to sats conversion rate (deferred to Phase 10)
     ///
     /// # Arguments
     /// * `data` - Share validation data with block_found=true
@@ -530,9 +550,10 @@ impl MintHandler {
     /// Returns `MintError` if lifecycle transition fails
     async fn handle_block_found(&mut self, data: &EHashMintData) -> Result<(), MintError> {
         tracing::info!(
-            "Block found event received for channel {} (template_id: {:?})",
+            "Block found event received for channel {} (template_id: {:?}, coinbase size: {} bytes)",
             data.channel_id,
-            data.template_id
+            data.template_id,
+            data.coinbase.as_ref().map(|c| c.len()).unwrap_or(0)
         );
 
         // Mint eHash tokens for the block-finding share
@@ -546,19 +567,86 @@ impl MintHandler {
             let _proofs = self.mint_ehash_tokens(data).await?;
         }
 
-        // TODO: Implement full keyset lifecycle (Phase 10)
-        // This includes:
-        // 1. Query Template Provider for block reward details
-        // 2. Create new ACTIVE keyset (to continue minting)
-        // 3. Transition previous keyset ACTIVE → QUANTIFYING → PAYOUT
-        // 4. Calculate eHash-to-sats conversion rate
-        // 5. Enable eHash to sats swaps for the PAYOUT keyset
+        // Query Template Provider for block reward details (stub)
+        // In Phase 10, this will query the actual Template Provider
+        let block_reward = self.query_template_provider_stub(data).await?;
+        tracing::info!(
+            "Block reward info (stub): height={}, reward_sats={}",
+            block_reward.height,
+            block_reward.total_reward_sats
+        );
+
+        // Trigger keyset lifecycle transitions (deferred to Phase 10)
+        // Full implementation will:
+        // 1. Get active keyset ID
+        // 2. Calculate outstanding eHash amount for keyset
+        // 3. Create new ACTIVE keyset (to continue minting)
+        // 4. Transition previous keyset ACTIVE → QUANTIFYING
+        // 5. Calculate eHash-to-sats conversion rate
+        // 6. Transition keyset QUANTIFYING → PAYOUT with conversion rate
+        // 7. Enable eHash to sats swaps for the PAYOUT keyset
 
         tracing::warn!(
             "Keyset lifecycle management not yet implemented (deferred to Phase 10)"
         );
+        tracing::info!(
+            "Would transition keyset lifecycle: ACTIVE → QUANTIFYING → PAYOUT"
+        );
 
         Ok(())
+    }
+
+    /// Query block reward details (stub)
+    ///
+    /// This is a placeholder implementation that returns mock data.
+    /// Phase 10 will implement actual block reward querying via Bitcoin RPC.
+    ///
+    /// # Phase 10 Implementation Plan
+    /// The production implementation will use Bitcoin Core RPC to fetch real block data:
+    /// - Use `bitcoincore-rpc` crate to connect to Bitcoin Core node
+    /// - Use `data.share_hash` directly as the block hash (when block_found=true, share_hash IS the block hash)
+    /// - Call `getblock(block_hash, verbosity=2)` RPC method to get full block data
+    /// - Extract coinbase transaction output value to get block reward
+    /// - Sum transaction fees from block data (total_fees = sum(inputs) - sum(outputs) for all non-coinbase txs)
+    /// - Configuration will include RPC endpoint, auth credentials, timeout
+    ///
+    /// # Arguments
+    /// * `data` - Share validation data with share_hash (which is the block hash when block_found=true)
+    ///
+    /// # Returns
+    /// Block reward information including height and total reward
+    ///
+    /// # Errors
+    /// Returns `MintError` if RPC query fails
+    async fn query_template_provider_stub(
+        &self,
+        data: &EHashMintData,
+    ) -> Result<BlockRewardInfo, MintError> {
+        // Stub implementation - Phase 10 will use Bitcoin RPC
+        // Production flow:
+        // 1. Use data.share_hash directly as block_hash (it IS the block hash when block_found=true)
+        // 2. Call Bitcoin RPC: getblock(block_hash, verbosity=2)
+        // 3. Parse coinbase transaction output value for block reward
+        // 4. Calculate total fees from all transactions in block
+        // 5. Return BlockRewardInfo with real data
+
+        let template_id = data.template_id.unwrap_or(0);
+
+        tracing::debug!(
+            "Block reward query stub called for block hash {} (template_id: {}, will use Bitcoin RPC in Phase 10)",
+            data.share_hash,
+            template_id
+        );
+
+        // Mock block reward data
+        // In production, this would come from Bitcoin RPC getblock(data.share_hash)
+        Ok(BlockRewardInfo {
+            height: 800_000, // Mock block height
+            total_reward_sats: 625_000_000, // 6.25 BTC coinbase + fees
+            coinbase_reward_sats: 625_000_000,
+            fees_sats: 0,
+            template_id,
+        })
     }
 }
 
@@ -973,6 +1061,236 @@ mod tests {
             quote1.as_ref().unwrap().id,
             quote2.as_ref().unwrap().id,
             "Quote IDs should be different due to different pubkeys"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_found_basic() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create block-finding share with sufficient difficulty
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00); // 40 leading zeros
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(12345),
+            coinbase: Some(vec![0x01, 0x02, 0x03]),
+        };
+
+        // Should handle block found without errors
+        let result = handler.handle_block_found(&data).await;
+        assert!(
+            result.is_ok(),
+            "handle_block_found should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_found_mints_ehash() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create block-finding share with sufficient difficulty
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00); // 40 leading zeros = 256 eHash
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(12345),
+            coinbase: Some(vec![0x01, 0x02, 0x03]),
+        };
+
+        // Handle block found
+        handler.handle_block_found(&data).await.unwrap();
+
+        // Verify quote was created (block-finding shares still earn eHash)
+        let localstore = handler.mint_instance.localstore();
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+        let quote_id_str = format!("ehash_test_user_1_1");
+        let quote_id_b64 = general_purpose::URL_SAFE.encode(quote_id_str.as_bytes());
+        let quote_id = QuoteId::BASE64(quote_id_b64);
+        let quote = localstore.get_mint_quote(&quote_id).await.unwrap();
+
+        assert!(
+            quote.is_some(),
+            "Block-finding share should still mint eHash tokens"
+        );
+        let quote = quote.unwrap();
+        assert_eq!(
+            quote.payments.len(),
+            1,
+            "Quote should have one payment"
+        );
+        assert_eq!(
+            quote.payments[0].amount,
+            Amount::from(256u64),
+            "Payment amount should be 256 eHash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_block_found_with_template_info() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create block-finding share
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let template_id = 98765u64;
+        let coinbase = vec![0xde, 0xad, 0xbe, 0xef];
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(template_id),
+            coinbase: Some(coinbase.clone()),
+        };
+
+        // Handle block found
+        let result = handler.handle_block_found(&data).await;
+        assert!(
+            result.is_ok(),
+            "handle_block_found with template info should succeed"
+        );
+
+        // Verify template_id and coinbase are available in the data
+        assert_eq!(data.template_id, Some(template_id));
+        assert_eq!(data.coinbase, Some(coinbase));
+    }
+
+    #[tokio::test]
+    async fn test_query_template_provider_stub() {
+        let config = create_test_config();
+        let handler = MintHandler::new(config).await.unwrap();
+
+        // Create test data
+        let share_hash = Hash::from_byte_array([0u8; 32]);
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(12345),
+            coinbase: Some(vec![0x01, 0x02]),
+        };
+
+        // Query stub
+        let result = handler.query_template_provider_stub(&data).await;
+        assert!(result.is_ok(), "Template provider stub should succeed");
+
+        let block_reward = result.unwrap();
+        assert_eq!(block_reward.template_id, 12345);
+        assert!(
+            block_reward.total_reward_sats > 0,
+            "Block reward should be non-zero"
+        );
+        assert_eq!(
+            block_reward.height, 800_000,
+            "Mock block height should be 800,000"
+        );
+        assert_eq!(
+            block_reward.total_reward_sats, 625_000_000,
+            "Mock reward should be 6.25 BTC"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_mint_data_routes_to_block_found() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create block-finding share
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(12345),
+            coinbase: Some(vec![0x01, 0x02, 0x03]),
+        };
+
+        // process_mint_data should detect block_found and route to handle_block_found
+        let result = handler.process_mint_data(data).await;
+        assert!(
+            result.is_ok(),
+            "process_mint_data should route block found events correctly"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_block_found_below_threshold() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create block-finding share with difficulty below threshold
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..3].fill(0x00); // Only 24 leading zeros (below 32 minimum)
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: true,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: Some(12345),
+            coinbase: Some(vec![0x01, 0x02, 0x03]),
+        };
+
+        // Should still handle block found (just won't mint eHash tokens)
+        let result = handler.handle_block_found(&data).await;
+        assert!(
+            result.is_ok(),
+            "handle_block_found should succeed even if below eHash threshold"
+        );
+
+        // Verify no quote was created (below threshold)
+        let localstore = handler.mint_instance.localstore();
+        use bitcoin::base64::{engine::general_purpose, Engine as _};
+        let quote_id_str = format!("ehash_test_user_1_1");
+        let quote_id_b64 = general_purpose::URL_SAFE.encode(quote_id_str.as_bytes());
+        let quote_id = QuoteId::BASE64(quote_id_b64);
+        let quote = localstore.get_mint_quote(&quote_id).await.unwrap();
+
+        assert!(
+            quote.is_none(),
+            "No quote should be created for shares below eHash threshold"
         );
     }
 

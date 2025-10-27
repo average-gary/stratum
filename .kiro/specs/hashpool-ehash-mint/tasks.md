@@ -105,9 +105,9 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Note**: P2PK locking implemented by storing locking pubkeys in PAID MintQuotes. External wallets query quotes by pubkey, create blinded messages with P2PK SpendingConditions, and receive P2PK-locked tokens via standard Cashu protocol. This approach maintains Cashu's privacy guarantees.
 
 ### 3.5 Add block found event handling
-- [ ] Implement `handle_block_found(&mut self, data: &EHashMintData)`
-- [ ] Trigger keyset lifecycle transition
-- [ ] Query Template Provider for block reward (stub for now)
+- [x] Implement `handle_block_found(&mut self, data: &EHashMintData)`
+- [x] Trigger keyset lifecycle transition
+- [x] Query Template Provider for block reward (stub for now)
 - **Requirements**: 9.1, 9.2
 - **Files**: `common/ehash/src/mint.rs`
 
@@ -460,12 +460,25 @@ _Note: This phase implements the full keyset lifecycle management. Can be deferr
 - **Requirements**: 9.1, 9.3
 - **Files**: `common/ehash/src/mint.rs`
 
-### 10.3 Add Template Provider integration
-- [ ] Query Template Provider for block reward details
-- [ ] Calculate total reward (coinbase + fees)
-- [ ] Store reward amount for conversion rate calculation
+### 10.3 Add Bitcoin RPC integration for block reward querying
+- [ ] Add `bitcoincore-rpc` dependency to `common/ehash/Cargo.toml`
+- [ ] Add RPC configuration to `MintConfig` (endpoint, auth, timeout)
+- [ ] Implement `BitcoinRpcClient` wrapper in `common/ehash/src/rpc.rs`
+- [ ] Use `EHashMintData.share_hash` directly as block hash (when block_found=true, share_hash IS the block hash)
+- [ ] Call Bitcoin RPC `getblock(block_hash, verbosity=2)` to fetch full block data
+- [ ] Parse coinbase transaction output value to extract block reward amount
+- [ ] Calculate total transaction fees from block data (sum of all tx fees)
+- [ ] Replace `query_template_provider_stub()` with `query_block_reward_rpc()`
+- [ ] Add error handling for RPC connection failures and timeouts
+- [ ] Add configuration validation for RPC credentials
 - **Requirements**: 9.1
-- **Files**: `common/ehash/src/mint.rs`
+- **Files**: `common/ehash/src/mint.rs`, `common/ehash/src/rpc.rs`, `common/ehash/src/config.rs`
+- **Implementation Notes**:
+  - Use async RPC client for non-blocking calls
+  - Block hash is already available as share_hash in EHashMintData
+  - Cache block reward data to avoid redundant RPC calls
+  - Support multiple RPC endpoints for failover
+  - Handle Bitcoin Core sync status (don't query unconfirmed blocks)
 
 ### 10.4 Add BOLT12 payment detection (stub)
 - [ ] Define PayoutTrigger enum with BlockReward and Bolt12Payment
