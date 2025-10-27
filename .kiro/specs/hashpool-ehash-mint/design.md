@@ -45,38 +45,40 @@ Based on analysis of the hashpool submodule at `deps/hashpool/protocols/ehash/`:
 
 ```mermaid
 sequenceDiagram
+    participant Miner
     participant TProxy
     participant Pool
     participant Mint
     participant ExternalWallet
-    
-    Note over TProxy, Pool: 1. Extension Negotiation & Channel Setup
-    TProxy->>Pool: SetupConnection
-    Pool->>TProxy: SetupConnection.Success
-    TProxy->>Pool: RequestExtensions [0x0003]
-    Pool->>TProxy: RequestExtensions.Success [0x0003]
-    TProxy->>Pool: OpenMiningChannel + TLV[locking_pubkey]
-    Pool->>TProxy: OpenMiningChannel.Success + TLV[mint_url]
-    
+
+    Note over Miner, TProxy: 1. Connection Setup with hpub
+    Miner->>TProxy: OpenExtendedMiningChannel (user_identity="hpub1qw508d...")
+    TProxy->>TProxy: Parse & validate hpub (disconnect if invalid)
+    TProxy->>TProxy: Extract secp256k1 pubkey from hpub
+    TProxy->>Miner: OpenMiningChannel.Success
+
     Note over TProxy, Pool: 2. Mining Loop
     Pool->>TProxy: NewMiningJob
-    TProxy->>Pool: SubmitShares
-    
-    Note over Pool, Mint: 3. Share Processing & eHash Minting
+    Miner->>TProxy: SubmitShares
+    TProxy->>Pool: SubmitSharesExtended + TLV[0x0004: 33-byte pubkey]
+
+    Note over Pool, Mint: 3. Share Processing & NUT-20 P2PK Minting
+    Pool->>Pool: Extract pubkey from TLV 0x0004
     Pool->>Pool: Validate Share & Calculate eHash Amount
-    Pool->>Mint: Create CDK MintQuote (pubkey=locking_pubkey, state=PAID, amount=ehash_amount)
-    Pool->>Mint: Mint P2PK-locked tokens using SpendingConditions::new_p2pk(locking_pubkey)
-    Pool->>Pool: Increment ehash_tokens_minted counter
-    Pool->>TProxy: SubmitSharesSuccess + TLV[ehash_tokens_minted]
-    
-    Note over ExternalWallet, Mint: 4. External Wallet P2PK Redemption
-    ExternalWallet->>TProxy: Check ehash tokens minted count
-    TProxy->>ExternalWallet: Return ehash_tokens_minted
-    ExternalWallet->>Mint: Query P2PK-locked tokens by pubkey
-    Mint->>ExternalWallet: Return P2PK-locked eHash tokens
-    ExternalWallet->>Mint: CDK receive with ReceiveOptions{p2pk_signing_keys: [secret_key]}
-    Mint->>ExternalWallet: Unlocked eHash tokens
-    ExternalWallet->>ExternalWallet: eHash tokens now spendable
+    Pool->>Mint: Create PAID MintQuote (quote_id=UUID_v4, pubkey=per_share_pubkey)
+    Note over Mint: NUT-04: Random UUID prevents front-running<br/>NUT-20: P2PK lock enforces authentication
+    Mint->>Mint: Store quote with share hash as payment proof
+    Pool->>TProxy: SubmitSharesSuccess
+
+    Note over ExternalWallet, Mint: 4. NUT-20 Authenticated Redemption
+    ExternalWallet->>Mint: Query quotes by locking pubkey (authenticated)
+    Mint->>ExternalWallet: Return secret UUID quote IDs
+    ExternalWallet->>ExternalWallet: Create blinded messages (normal secrets)
+    ExternalWallet->>ExternalWallet: Sign MintRequest with private key (NUT-20)
+    ExternalWallet->>Mint: Submit signed MintRequest
+    Mint->>Mint: Verify signature matches quote's locking pubkey
+    Mint->>ExternalWallet: Return blind signatures
+    ExternalWallet->>ExternalWallet: Unblind to get normal eHash tokens
 ```
 
 ### KeySet Sequence Diagram
@@ -167,9 +169,9 @@ match res {
             sequence_number: msg.sequence_number,
             timestamp: SystemTime::now(),
             block_found: false,
-            locking_pubkey: self.get_channel_locking_pubkey(channel_id),
+            locking_pubkey: self.extract_pubkey_from_tlv(&msg)?,  // From TLV 0x0004
         };
-        
+
         // Send to dedicated Mint thread via async channel
         if let Some(mint_sender) = &self.mint_sender {
             let _ = mint_sender.try_send(mint_data).map_err(|e| {
@@ -191,7 +193,7 @@ match res {
             block_found: true,
             template_id: Some(template_id),
             coinbase: Some(coinbase.clone()),
-            locking_pubkey: self.get_channel_locking_pubkey(channel_id),
+            locking_pubkey: self.extract_pubkey_from_tlv(&msg)?,  // From TLV 0x0004
         };
         
         // Send to Mint thread for both minting and keyset lifecycle
@@ -249,8 +251,6 @@ pub struct MintHandler {
     receiver: async_channel::Receiver<EHashMintData>,
     sender: async_channel::Sender<EHashMintData>,
     config: MintConfig,
-    // Channel locking pubkey mapping for P2PK token creation
-    channel_pubkeys: HashMap<u32, PublicKey>,
 }
 
 impl MintHandler {
@@ -273,16 +273,26 @@ impl MintHandler {
     
     /// Gracefully shutdown the mint handler, completing pending operations
     pub async fn shutdown(&mut self) -> Result<(), MintError>;
-    
-    /// Register locking pubkey for a channel (from TLV during channel setup)
-    pub fn register_channel_pubkey(&mut self, channel_id: u32, pubkey: PublicKey);
-    
-    /// Create P2PK-locked eHash tokens using CDK's native minting
-    /// Creates MintQuote in PAID state and mints tokens with P2PK spending conditions
+
+    /// Create NUT-04/NUT-20 compliant PAID quotes with per-share P2PK locking
+    /// - Generates random UUID v4 quote ID (NUT-04: prevents front-running)
+    /// - Attaches locking_pubkey from EHashMintData (NUT-20: enforces authentication)
+    /// - Returns empty proofs (wallet mints via NUT-20 authenticated flow)
     async fn mint_ehash_tokens(&mut self, data: &EHashMintData) -> Result<Vec<Proof>, MintError>;
-    
+
     /// Handle block found events and trigger keyset lifecycle
     async fn handle_block_found(&mut self, data: &EHashMintData) -> Result<(), MintError>;
+
+    /// Store pubkey-to-quote mapping in CDK KV store for authenticated queries
+    async fn store_pubkey_quote_mapping(&mut self, pubkey: &PublicKey, quote_id: &QuoteId) -> Result<(), MintError>;
+
+    /// Query quotes by pubkey with NUT-20 signature authentication
+    async fn get_quotes_by_pubkey_authenticated(
+        &self,
+        pubkey: &PublicKey,
+        signature: &Signature,
+        message: &str,
+    ) -> Result<Vec<QuoteSummary>, MintError>;
 }
 
 #[derive(Clone, Debug)]
@@ -291,75 +301,68 @@ pub struct MintSender {
 }
 ```
 
-### 3. Wallet Handler Component
+### 3. EHash Handler Component
 
-The WalletHandler manages share correlation and focuses on HASH unit wallet operations (TProxy uses HASH unit only):
+The EhashHandler tracks eHash accounting statistics for downstream miners in TProxy. It does not redeem tokens - external wallets with private keys handle redemption via the authenticated quote discovery API:
 
 ```rust
 use bitcoin::secp256k1::PublicKey;
-use cdk::{Wallet as CdkWallet, Amount, nuts::CurrencyUnit};
+use std::collections::HashMap;
 
-pub struct WalletHandler {
-    /// CDK Wallet instance for HASH unit operations only (per CDK single-unit architecture)
-    wallet_instance: Option<CdkWallet>,  // Always configured for CurrencyUnit::Custom("HASH")
-    receiver: async_channel::Receiver<WalletCorrelationData>,
-    sender: async_channel::Sender<WalletCorrelationData>,
-    config: WalletConfig,
-    locking_pubkey: PublicKey,  // Configured locking pubkey for wallet authentication
-    user_identity: String,  // Derived from locking pubkey or configured
-    
-    // Fault tolerance fields
-    retry_queue: VecDeque<WalletCorrelationData>,
-    failure_count: u32,
-    last_failure: Option<SystemTime>,
-    max_retries: u32,
-    backoff_multiplier: u64,
-    recovery_enabled: bool,
+pub struct EhashHandler {
+    /// Accounting data for tracking eHash issued per pubkey
+    ehash_balances: HashMap<PublicKey, u64>,  // pubkey -> total eHash earned
+    channel_stats: HashMap<u32, ChannelStats>,  // channel_id -> statistics
+    receiver: async_channel::Receiver<EhashCorrelationData>,
+    sender: async_channel::Sender<EhashCorrelationData>,
 }
 
 #[derive(Debug, Clone)]
-pub struct WalletCorrelationData {
+pub struct ChannelStats {
+    pub channel_id: u32,
+    pub locking_pubkey: PublicKey,
+    pub user_identity: String,
+    pub total_ehash: u64,
+    pub share_count: u64,
+    pub last_share_time: SystemTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct EhashCorrelationData {
     pub channel_id: u32,
     pub sequence_number: u32,
     pub user_identity: String,
     pub timestamp: SystemTime,
-    pub ehash_tokens_minted: u32,
+    pub ehash_amount: u64,           // Amount of eHash issued for this share (for accounting/display)
+    pub locking_pubkey: PublicKey,   // Downstream miner's pubkey (for tracking by user)
 }
 
-impl WalletHandler {
-    /// Create new WalletHandler (used by both TProxy and JDC-wallet mode)
-    pub async fn new(config: WalletConfig, status_tx: Sender<Status>) -> Result<Self, WalletError>;
-    
-    pub fn get_receiver(&self) -> async_channel::Receiver<WalletCorrelationData>;
-    pub fn get_sender(&self) -> async_channel::Sender<WalletCorrelationData>;
-    
-    /// Main processing loop for the wallet thread
-    pub async fn run(&mut self) -> Result<(), WalletError>;
-    
+impl EhashHandler {
+    /// Create new EhashHandler (used by TProxy and JDC-ehash mode)
+    /// Tracks eHash accounting for downstream miners but does not redeem tokens
+    pub fn new() -> Self;
+
+    pub fn get_receiver(&self) -> async_channel::Receiver<EhashCorrelationData>;
+    pub fn get_sender(&self) -> async_channel::Sender<EhashCorrelationData>;
+
+    /// Main processing loop for the ehash handler thread
+    pub async fn run(&mut self) -> Result<(), EhashError>;
+
     /// Main processing loop with graceful shutdown handling
-    /// Completes pending wallet operations before terminating
-    pub async fn run_with_shutdown(&mut self, shutdown_rx: async_channel::Receiver<()>) -> Result<(), WalletError>;
-    
+    pub async fn run_with_shutdown(&mut self, shutdown_rx: async_channel::Receiver<()>) -> Result<(), EhashError>;
+
     /// Process SubmitSharesSuccess correlation data
-    pub async fn process_correlation_data(&mut self, data: WalletCorrelationData) -> Result<(), WalletError>;
-    
-    /// Gracefully shutdown the wallet handler, completing pending operations
-    pub async fn shutdown(&mut self) -> Result<(), WalletError>;
-    
-    /// Process correlation data with automatic retry on failure
-    pub async fn process_correlation_data_with_retry(&mut self, data: WalletCorrelationData) -> Result<(), WalletError>;
-    
-    /// Attempt to recover from failures and process retry queue
-    pub async fn attempt_recovery(&mut self) -> Result<(), WalletError>;
-    
-    /// Get locking pubkey for connection/channel setup
-    pub fn get_locking_pubkey(&self) -> PublicKey;
-    
-    /// Get user identity (derived from pubkey or configured)
-    pub fn get_user_identity(&self) -> &str;
-    
-    /// Query mint for P2PK-locked tokens by locking pubkey
-    async fn query_p2pk_tokens(&self) -> Result<Vec<Proof>, WalletError>;
+    /// Updates accounting statistics for display purposes
+    pub async fn process_correlation_data(&mut self, data: EhashCorrelationData) -> Result<(), EhashError>;
+
+    /// Gracefully shutdown the ehash handler
+    pub async fn shutdown(&mut self) -> Result<(), EhashError>;
+
+    /// Get total eHash earned by a specific pubkey
+    pub fn get_ehash_balance(&self, pubkey: &PublicKey) -> u64;
+
+    /// Get accounting statistics for a channel
+    pub fn get_channel_stats(&self, channel_id: u32) -> Option<ChannelStats>;
 }
 ```
 
@@ -372,7 +375,6 @@ The system follows the existing Stratum v2 pattern of spawning dedicated threads
 pub struct ChannelManager {
     // Existing fields...
     mint_sender: Option<async_channel::Sender<EHashMintData>>,
-    channel_pubkeys: HashMap<u32, PublicKey>,  // Track locking pubkeys by channel
 }
 
 impl ChannelManager {
@@ -381,15 +383,19 @@ impl ChannelManager {
         self.mint_sender = Some(mint_sender);
         self
     }
-    
-    /// Register locking pubkey from TLV during channel setup
-    pub fn register_channel_pubkey(&mut self, channel_id: u32, pubkey: PublicKey) {
-        self.channel_pubkeys.insert(channel_id, pubkey);
-    }
-    
-    /// Get locking pubkey for a channel
-    fn get_channel_locking_pubkey(&self, channel_id: u32) -> Option<PublicKey> {
-        self.channel_pubkeys.get(&channel_id).copied()
+
+    /// Extract per-share locking pubkey from SubmitSharesExtended TLV field 0x0004
+    fn extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended) -> Result<PublicKey, Error> {
+        let pubkey_tlv = msg.tlv_fields.iter()
+            .find(|tlv| tlv.type_ == 0x0004)
+            .ok_or(Error::MissingPubkeyTLV)?;
+
+        if pubkey_tlv.length != 33 {
+            return Err(Error::InvalidTLVLength);
+        }
+
+        PublicKey::from_slice(&pubkey_tlv.value)
+            .map_err(|_| Error::InvalidPubkey)
     }
 }
 
@@ -418,20 +424,18 @@ pub async fn spawn_mint_thread(
     Ok(sender)
 }
 
-pub async fn spawn_wallet_thread(
+pub fn spawn_ehash_handler_thread(
     task_manager: &mut TaskManager,
-    config: WalletConfig,
-    status_tx: &Sender<Status>,
     shutdown_rx: async_channel::Receiver<()>,
-) -> Result<async_channel::Sender<WalletCorrelationData>, WalletError> {
-    let mut wallet_handler = WalletHandler::new(config, status_tx.clone()).await?;
-    let sender = wallet_handler.get_sender();
-    
-    task_manager.spawn("wallet_handler", async move {
-        wallet_handler.run_with_shutdown(shutdown_rx).await
+) -> async_channel::Sender<EhashCorrelationData> {
+    let mut ehash_handler = EhashHandler::new();
+    let sender = ehash_handler.get_sender();
+
+    task_manager.spawn("ehash_handler", async move {
+        ehash_handler.run_with_shutdown(shutdown_rx).await
     });
-    
-    Ok(sender)
+
+    sender
 }
 ```
 
@@ -446,12 +450,9 @@ The JDC role supports flexible configuration as either a Mint or Wallet:
 pub struct JdcEHashConfig {
     /// JDC eHash mode: "mint" or "wallet"
     pub mode: JdcEHashMode,
-    
+
     /// Mint configuration (used when mode = "mint")
     pub mint: Option<MintConfig>,
-    
-    /// Wallet configuration (used when mode = "wallet")  
-    pub wallet: Option<WalletConfig>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -459,8 +460,8 @@ pub struct JdcEHashConfig {
 pub enum JdcEHashMode {
     /// JDC acts as a mint, processing share validation results
     Mint,
-    /// JDC acts as a wallet, processing SubmitSharesSuccess correlation
-    Wallet,
+    /// JDC tracks eHash accounting, processing SubmitSharesSuccess correlation
+    Ehash,
 }
 
 // JDC initialization based on configuration
@@ -478,11 +479,9 @@ impl JdcChannelManager {
                     self.mint_sender = Some(mint_sender);
                 }
             }
-            JdcEHashMode::Wallet => {
-                if let Some(wallet_config) = config.wallet {
-                    let wallet_sender = spawn_wallet_thread(task_manager, wallet_config, status_tx).await?;
-                    self.wallet_sender = Some(wallet_sender);
-                }
+            JdcEHashMode::Ehash => {
+                let ehash_sender = spawn_ehash_handler_thread(task_manager, shutdown_rx);
+                self.ehash_sender = Some(ehash_sender);
             }
         }
         Ok(self)
@@ -526,26 +525,6 @@ pub struct MintConfig {
     pub log_level: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TProxyShareConfig {
-    // Locking pubkey for wallet authentication
-    pub locking_pubkey: String,  // bech32-encoded with 'hpub' prefix (e.g., "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k...")
-    
-    // User identity (optional - can be derived from pubkey)
-    pub user_identity: Option<String>,  // User identity to use for channels (defaults to pubkey-derived)
-    
-    // Mint correlation settings (HASH unit wallet only per CDK architecture)
-    pub mint_url: Option<MintUrl>,  // Optional mint URL for HASH unit wallet integration
-    
-    // Fault tolerance configuration
-    pub max_retries: Option<u32>,  // Maximum retry attempts before disabling (default: 10)
-    pub backoff_multiplier: Option<u64>,  // Backoff multiplier in seconds (default: 2)
-    pub recovery_enabled: Option<bool>,  // Enable automatic recovery (default: true)
-    
-    // Integration with existing Stratum v2 config
-    pub log_level: Option<String>,
-}
-
 // Re-export CDK types for convenience
 pub use cdk::nuts::CurrencyUnit as UnitType;
 pub use cdk::Amount;
@@ -566,17 +545,21 @@ pub struct EHashMintData {
     // Core share data (available from ShareValidationResult)
     pub share_hash: Hash,
     pub block_found: bool,
-    
+
     // Channel context (available from message and channel API)
     pub channel_id: u32,
-    pub user_identity: String,
+    pub user_identity: String,  // hpub format from downstream miner
     pub target: Target,
     pub sequence_number: u32,
     pub timestamp: SystemTime,
-    
+
     // Optional template data (available in BlockFound case)
     pub template_id: Option<u64>,
     pub coinbase: Option<Vec<u8>>,
+
+    // Required per-share locking pubkey for NUT-20 P2PK authentication
+    // Extracted from SubmitSharesExtended TLV field 0x0004
+    pub locking_pubkey: bitcoin::secp256k1::PublicKey,
 }
 
 impl EHashMintData {
@@ -1086,50 +1069,178 @@ Following the SV2 extension specification, eHash functionality will be implement
    Client <--- RequestExtensions.Success [0x0003] ---- Server
    ```
 
-### TLV Fields for eHash Extension
+### TLV Fields for eHash Protocol
 
-When extension `0x0003` is negotiated, the following TLV fields are available:
+eHash uses TLV field 0x0004 for per-share pubkey locking:
 
-| Field Type | TLV Type | Description |
-|------------|----------|-------------|
-| `0x01` | `0x0003\|0x01` | `locking_pubkey` - 33-byte compressed public key |
-| `0x02` | `0x0003\|0x02` | `mint_url` - UTF-8 encoded mint URL |
-| `0x03` | `0x0003\|0x03` | `outstanding_quotes` - U32 count of pending quotes for this locking_pubkey |
+| Field Type | TLV Type | Message | Description |
+|------------|----------|---------|-------------|
+| `0x0004` | `0x0004` | `SubmitSharesExtended` | `locking_pubkey` - 33-byte compressed secp256k1 public key (per-share, TProxy→Pool) |
+
+#### TLV Field 0x0004 Format
+
+**Type:** `0x0004` - eHash Locking Pubkey (per-share)
+
+**Structure:**
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| type | u16 | 2 bytes | `0x0004` (eHash Locking Pubkey) |
+| length | u16 | 2 bytes | `33` (always 33 bytes for compressed pubkey) |
+| value | bytes | 33 bytes | Compressed secp256k1 public key (SEC1 format) |
+
+**Value Format (SEC1 Compressed):**
+
+The 33-byte value is a compressed secp256k1 public key in SEC1 format:
+- First byte: `0x02` or `0x03` (compression prefix indicating y-coordinate parity)
+- Next 32 bytes: x-coordinate of the public key point
+
+Example:
+```
+02 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+^  ^                                                              ^
+|  |                                                              |
+|  +------ 32-byte x-coordinate --------------------------------+
+|
++-- Compression prefix (0x02 = even y, 0x03 = odd y)
+```
 
 ### Modified Message Flow
 
-#### 1. Channel Setup with eHash
-- **TProxy → Pool**: `OpenStandardMiningChannel` or `OpenExtendedMiningChannel` with TLV:
+#### 1. Downstream Connection Setup
+- **Miner → TProxy**: `OpenExtendedMiningChannel` with:
   ```
-  [0x0003|0x01] [0x0021] [33-byte compressed pubkey]
+  user_identity: "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k..."
   ```
+- **TProxy**: Parses hpub, validates bech32 format, extracts secp256k1 pubkey
+- **TProxy**: If invalid → disconnect + no jobs
+- **TProxy**: If valid → store pubkey for the channel
 
-- **Pool → TProxy**: `OpenMiningChannel.Success` with TLV:
+#### 2. Share Submission with Per-Share Pubkey
+- **TProxy → Pool**: `SubmitSharesExtended` with TLV:
   ```
-  [0x0003|0x02] [LENGTH] [mint_url]
+  [0x0004] [0x0021] [33-byte compressed secp256k1 pubkey]
   ```
+- Each share includes the locking pubkey from the downstream miner's hpub
+- Pool extracts pubkey from TLV field 0x0004
 
-#### 2. Share Submission (No Changes)
-- Standard `SubmitSharesStandard` or `SubmitSharesExtended` messages
-- No TLV modifications needed for share submission
+#### 3. Share Response
+- **Pool → TProxy**: `SubmitSharesSuccess` (standard response)
+- No quote_id communicated in response
+- TProxy will query mint later using authenticated API to discover quote IDs
 
-#### 3. Share Response with eHash Info
-- **Pool → TProxy**: `SubmitSharesSuccess` with optional TLV:
-  ```
-  [0x0003|0x03] [0x0004] [outstanding_quotes_count]
-  ```
+#### Implementation Examples
 
-### Protocol Flow with CDK P2PK Integration
+**TProxy - Extract and Include Pubkey in TLV:**
+```rust
+// On downstream connection
+fn handle_open_channel(user_identity: String, channel_id: u32) -> Result<(), Error> {
+    // Parse hpub from user_identity
+    let pubkey = parse_hpub(&user_identity)?;
 
-1. **Extension Negotiation**: Client requests eHash extension support
-2. **Channel Setup**: TProxy includes locking pubkey in channel open message
-3. **Share Processing**: Pool validates shares and creates CDK tokens with P2PK locking:
-   - Uses `SpendingConditions::new_p2pk(locking_pubkey, None)` 
-   - Creates `MintQuote` in `MintQuoteState::Paid` state
-   - Mints tokens locked to the TProxy's pubkey using CDK's P2PK mechanism
-4. **External Redemption**: Wallets use CDK's P2PK redemption:
-   - Query mint for quotes by pubkey
-   - Redeem P2PK-locked tokens using `ReceiveOptions` with `p2pk_signing_keys`
+    // If invalid, disconnect
+    if pubkey.is_none() {
+        return Err(Error::InvalidHpub);
+    }
+
+    // Store pubkey for this channel
+    self.channel_pubkeys.insert(channel_id, pubkey.unwrap());
+    Ok(())
+}
+
+// On share submission upstream
+fn submit_share_upstream(&self, channel_id: u32, share: Share) -> Result<(), Error> {
+    // Get pubkey for this channel
+    let pubkey = self.channel_pubkeys.get(&channel_id)?;
+
+    // Create TLV field 0x0004
+    let tlv = TLV {
+        type_: 0x0004,
+        length: 33,
+        value: pubkey.serialize(),  // 33-byte compressed SEC1 format
+    };
+
+    // Submit with TLV
+    submit_shares_extended(share, vec![tlv])?;
+    Ok(())
+}
+```
+
+**Pool - Extract Pubkey from TLV:**
+```rust
+fn extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended) -> Result<PublicKey, Error> {
+    // Find TLV field 0x0004
+    let pubkey_tlv = msg.tlv_fields.iter()
+        .find(|tlv| tlv.type_ == 0x0004)
+        .ok_or(Error::MissingPubkeyTLV)?;
+
+    // Validate length
+    if pubkey_tlv.length != 33 {
+        return Err(Error::InvalidTLVLength);
+    }
+
+    // Parse secp256k1 pubkey (SEC1 format)
+    PublicKey::from_slice(&pubkey_tlv.value)
+        .map_err(|_| Error::InvalidPubkey)
+}
+
+fn process_share(&self, share: SubmitSharesExtended) -> Result<(), Error> {
+    // Extract locking pubkey from TLV
+    let locking_pubkey = self.extract_pubkey_from_tlv(&share)?;
+
+    // Validate share and create EHashMintData
+    let mint_data = EHashMintData {
+        // ... other fields ...
+        locking_pubkey,  // Required per-share pubkey from TLV
+    };
+
+    // Send to mint handler
+    mint_sender.send(mint_data).await?;
+    Ok(())
+}
+```
+
+**Mint - Create NUT-04/NUT-20 Compliant Quote:**
+```rust
+async fn mint_ehash_tokens(&mut self, data: &EHashMintData) -> Result<Proofs, MintError> {
+    // Convert to CDK format
+    let locking_pubkey = CdkPublicKey::from(data.locking_pubkey);
+
+    // Generate random UUID v4 quote ID (NUT-04: prevents front-running)
+    let quote_id = Uuid::new_v4().to_string();
+
+    // Create PAID quote with NUT-20 P2PK lock
+    let quote = MintQuote::new(
+        Some(QuoteId::BASE64(quote_id)),
+        // ... other fields ...
+        Some(locking_pubkey),  // Required NUT-20 P2PK lock (per-share)
+        // ... other fields ...
+    );
+
+    // Store quote in database
+    localstore.add_mint_quote(quote).await?;
+
+    Ok(vec![])  // Wallet will mint via NUT-20 authenticated flow
+}
+```
+
+### Protocol Flow with NUT-04 and NUT-20
+
+1. **Connection Setup**: Miner specifies hpub in user_identity when connecting to TProxy
+2. **Validation**: TProxy parses and validates hpub format (disconnect if invalid)
+3. **Per-Share Submission**: TProxy includes locking pubkey from hpub in TLV field 0x0004
+4. **Quote Creation**: Pool/Mint creates PAID quotes with:
+   - Random UUID v4 quote ID (NUT-04: prevents front-running)
+   - Per-share locking pubkey from TLV (NUT-20: authorization control)
+   - Share hash as payment proof (auditability)
+5. **External Wallet Redemption**: Wallets use NUT-20 authenticated flow:
+   - Query mint for quotes by locking pubkey (signature-authenticated)
+   - Receive secret UUID quote IDs
+   - Create blinded messages (normal secrets - P2PK optional)
+   - Sign MintRequest with private key (NUT-20 authentication proves pubkey ownership)
+   - Mint verifies signature matches quote's locking pubkey
+   - Mint returns blind signatures
+   - Wallet unblinds to obtain normal eHash bearer tokens
 
 ### Implementation Benefits
 
@@ -1348,14 +1459,60 @@ pub fn decode_locking_pubkey(encoded: &str) -> Result<PublicKey, EncodingError> 
 }
 ```
 
+### hpub Format Specification
+
+**Format:** Bech32 (BIP 173)
+
+**HRP (Human Readable Part):** `hpub`
+
+**Data:** 33-byte compressed secp256k1 public key
+
+**Example:**
+```
+hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7kxqz5p9
+^   ^                                             ^
+|   |                                             |
+|   +--- Bech32-encoded 33-byte pubkey -----------+
+|
++-- Human Readable Part (identifies as hashpool pubkey)
+```
+
+**Validation:**
+```rust
+fn parse_hpub(hpub: &str) -> Result<PublicKey, Error> {
+    // Decode bech32
+    let (hrp, data) = bech32::decode(hpub)?;
+
+    // Verify HRP
+    if hrp != "hpub" {
+        return Err(Error::InvalidHRP);
+    }
+
+    // Verify length (33 bytes for compressed pubkey)
+    if data.len() != 33 {
+        return Err(Error::InvalidLength);
+    }
+
+    // Parse as secp256k1 pubkey
+    let pubkey = PublicKey::from_slice(&data)?;
+
+    Ok(pubkey)
+}
+```
+
 ### Configuration Examples
+
+#### Downstream Miner Configuration
+```
+# Miner specifies their hpub in user_identity when connecting to proxy
+user_identity = "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k..."
+```
 
 #### TProxy Configuration
 ```toml
-# TProxy configuration
-[ehash]
-locking_pubkey = "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
-mint_url = "https://mint.hashpool.dev"
+# TProxy validates hpub from downstream miners and tracks eHash accounting
+# No eHash-specific configuration needed - accounting happens automatically
+# Downstream miners specify their hpub in user_identity when connecting
 ```
 
 #### Pool/Mint Configuration (Phase 10 - with Bitcoin RPC)
@@ -1386,3 +1543,373 @@ recovery_enabled = true
 - **Standard format**: Consistent with Bitcoin address encoding practices
 - **Error detection**: Built-in checksum validation
 - **Flexible RPC**: Supports both local and remote Bitcoin Core nodes
+
+## Authenticated Quote Discovery by Pubkey
+
+### Problem Statement
+
+When the Pool creates PAID mint quotes for shares, external wallets and the wallet-proxy need to discover outstanding quote IDs. Since quote IDs are random UUIDs (NUT-04 compliant), they cannot be derived. However, allowing unauthenticated queries by pubkey would enable snooping by external parties.
+
+### Solution: Authenticated Query API with Signature Verification
+
+We'll use CDK's KV store to maintain pubkey-to-quote mappings and require NUT-20 signature authentication for all queries:
+
+```rust
+use cdk_common::database::KVStoreDatabase;
+use bitcoin::secp256k1::{PublicKey, Signature, Message};
+use cashu::quote_id::QuoteId;
+use uuid::Uuid;
+
+impl MintHandler {
+    /// Store pubkey-to-quote mapping when creating PAID quotes
+    async fn store_pubkey_quote_mapping(
+        &mut self,
+        pubkey: &PublicKey,
+        quote_id: &QuoteId,
+    ) -> Result<(), MintError> {
+        // Encode pubkey as hex string for KV key
+        let pubkey_hex = hex::encode(pubkey.serialize());
+
+        // Use KV store with namespace structure:
+        // primary_namespace: "ehash_pubkey_quotes"
+        // secondary_namespace: pubkey_hex
+        // key: quote_id_string
+        // value: timestamp (for cleanup/expiry tracking)
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let value = timestamp.to_be_bytes();
+
+        let mut tx = self.mint_instance.localstore.begin_transaction().await?;
+        tx.kv_write(
+            "ehash_pubkey_quotes",
+            &pubkey_hex,
+            &quote_id.to_string(),
+            &value,
+        ).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Query quotes by pubkey with signature authentication
+    async fn get_quotes_by_pubkey_authenticated(
+        &self,
+        pubkey: &PublicKey,
+        signature: &Signature,
+        message: &str,
+    ) -> Result<Vec<QuoteSummary>, MintError> {
+        // 1. Verify signature
+        let secp = Secp256k1::verification_only();
+        let msg = Message::from_hashed_data::<sha256::Hash>(message.as_bytes());
+
+        secp.verify_ecdsa(&msg, signature, pubkey)
+            .map_err(|_| MintError::InvalidSignature)?;
+
+        // 2. Query KV store for quote IDs
+        let pubkey_hex = hex::encode(pubkey.serialize());
+        let quote_id_keys = self.mint_instance.localstore
+            .kv_list("ehash_pubkey_quotes", &pubkey_hex)
+            .await?;
+
+        // 3. Fetch quote details for each quote_id
+        let mut summaries = Vec::new();
+        for key in quote_id_keys {
+            if let Ok(quote_id) = QuoteId::from_str(&key) {
+                if let Some(quote) = self.mint_instance.localstore
+                    .get_mint_quote(&quote_id)
+                    .await?
+                {
+                    summaries.push(QuoteSummary {
+                        quote_id: quote.id.clone(),
+                        amount: quote.amount.unwrap_or(Amount::ZERO),
+                        unit: quote.unit.clone(),
+                        state: quote.state(),
+                        created_time: quote.created_time,
+                        expiry: quote.expiry,
+                    });
+                }
+            }
+        }
+
+        Ok(summaries)
+    }
+
+    /// Update mint_ehash_tokens to store mapping after quote creation
+    async fn mint_ehash_tokens(&mut self, data: &EHashMintData) -> Result<Vec<Proof>, MintError> {
+        // Convert to CDK format
+        let locking_pubkey = CdkPublicKey::from(data.locking_pubkey);
+
+        // Generate random UUID v4 quote ID (NUT-04)
+        let quote_id_str = Uuid::new_v4().to_string();
+        let quote_id = QuoteId::BASE64(quote_id_str.clone());
+
+        // Create PAID MintQuote with NUT-20 P2PK lock
+        let quote = MintQuote::new(
+            Some(quote_id.clone()),
+            // ... other fields ...
+            Some(locking_pubkey),
+            // ... other fields ...
+        );
+
+        // Store quote in database
+        let mut tx = self.mint_instance.localstore.begin_transaction().await?;
+        tx.add_mint_quote(quote).await?;
+        tx.commit().await?;
+
+        // Store pubkey-to-quote mapping for authenticated discovery
+        self.store_pubkey_quote_mapping(&data.locking_pubkey, &quote_id).await?;
+
+        Ok(vec![])  // Empty proofs - wallet mints via NUT-20 flow
+    }
+}
+
+// EhashHandler - Track eHash accounting for downstream miners
+impl EhashHandler {
+    /// Process correlation data and update accounting statistics
+    async fn process_correlation_data(&mut self, data: EhashCorrelationData) -> Result<(), EhashError> {
+        // Update balance for this pubkey
+        *self.ehash_balances.entry(data.locking_pubkey).or_insert(0) += data.ehash_amount;
+
+        // Update channel statistics
+        let stats = self.channel_stats.entry(data.channel_id).or_insert(ChannelStats {
+            channel_id: data.channel_id,
+            locking_pubkey: data.locking_pubkey,
+            user_identity: data.user_identity.clone(),
+            total_ehash: 0,
+            share_count: 0,
+            last_share_time: data.timestamp,
+        });
+
+        stats.total_ehash += data.ehash_amount;
+        stats.share_count += 1;
+        stats.last_share_time = data.timestamp;
+
+        info!(
+            "Updated eHash balance for {}: +{} (total: {})",
+            data.user_identity,
+            data.ehash_amount,
+            stats.total_ehash
+        );
+
+        Ok(())
+    }
+
+    /// Get total eHash earned by a specific pubkey
+    pub fn get_ehash_balance(&self, pubkey: &PublicKey) -> u64 {
+        self.ehash_balances.get(pubkey).copied().unwrap_or(0)
+    }
+
+    /// Get accounting statistics for a channel
+    pub fn get_channel_stats(&self, channel_id: u32) -> Option<ChannelStats> {
+        self.channel_stats.get(&channel_id).cloned()
+    }
+}
+```
+
+### KV Store Namespace Structure
+
+```
+Primary Namespace: "ehash_pubkey_quotes"
+├── Secondary Namespace: <pubkey_hex_1>
+│   ├── Key: <quote_id_1> → Value: timestamp
+│   ├── Key: <quote_id_2> → Value: timestamp
+│   └── Key: <quote_id_3> → Value: timestamp
+├── Secondary Namespace: <pubkey_hex_2>
+│   ├── Key: <quote_id_4> → Value: timestamp
+│   └── Key: <quote_id_5> → Value: timestamp
+└── ...
+```
+
+**Example:**
+```
+ehash_pubkey_quotes/
+├── 02a1234...abcd/  (compressed pubkey hex)
+│   ├── 550e8400-e29b-41d4-a716-446655440000 → 1698765432
+│   └── 7c9e6679-7425-40de-944b-e07fc1f90ae7 → 1698765445
+└── 03def456...9876/
+    └── f47ac10b-58cc-4372-a567-0e02b2c3d479 → 1698765490
+```
+
+### API Endpoints
+
+#### Request/Response Structures
+```rust
+pub struct QuoteQueryRequest {
+    pub pubkey: PublicKey,
+    pub signature: Signature,
+    pub message: String,
+}
+
+pub struct QuoteQueryResponse {
+    pub quotes: Vec<QuoteSummary>,
+}
+
+pub struct QuoteSummary {
+    pub quote_id: QuoteId,
+    pub amount: Amount,
+    pub unit: CurrencyUnit,
+    pub state: MintQuoteState,
+    pub created_time: u64,
+    pub expiry: u64,
+}
+```
+
+#### HTTP REST Endpoint
+
+**Endpoint:** `POST /v1/ehash/quotes/by-pubkey`
+
+**Request:**
+```json
+{
+  "pubkey": "02a1234567890abcdef...",
+  "signature": "304402...",
+  "message": "ehash_quote_query_1698765432"
+}
+```
+
+**Response (Success - 200 OK):**
+```json
+{
+  "quotes": [
+    {
+      "quote_id": "550e8400-e29b-41d4-a716-446655440000",
+      "amount": 1024,
+      "unit": "HASH",
+      "state": "PAID",
+      "created_time": 1698765432,
+      "expiry": 1698851832
+    }
+  ]
+}
+```
+
+**Response (Auth Failure - 401 Unauthorized):**
+```json
+{
+  "error": "Invalid signature",
+  "code": 401
+}
+```
+
+### Protocol Flow
+
+```mermaid
+sequenceDiagram
+    participant Miner
+    participant TProxy
+    participant Pool
+    participant Mint
+    participant EhashHandler
+    participant ExternalWallet
+
+    Note over Miner, TProxy: 1. Share Submission
+    Miner->>TProxy: SubmitShares
+    TProxy->>Pool: SubmitSharesExtended + TLV[0x0004: pubkey]
+
+    Note over Pool, Mint: 2. Mint Creates Quote & Stores Mapping
+    Pool->>Pool: Validate share, calculate eHash amount
+    Pool->>Mint: EHashMintData (with locking_pubkey, ehash_amount)
+    Mint->>Mint: Create PAID quote with UUID v4 + P2PK lock
+    Mint->>Mint: Store pubkey→quote_id mapping in KV store
+    Pool->>TProxy: SubmitSharesSuccess
+
+    Note over TProxy, EhashHandler: 3. TProxy Accounting
+    TProxy->>EhashHandler: EhashCorrelationData (ehash_amount, pubkey)
+    EhashHandler->>EhashHandler: Update accounting stats for display
+
+    Note over ExternalWallet: 4. External Wallet Discovery (Periodic)
+    ExternalWallet->>ExternalWallet: Create challenge message
+    ExternalWallet->>ExternalWallet: Sign with private key
+
+    Note over ExternalWallet, Mint: 5. Authenticated Quote Query
+    ExternalWallet->>Mint: POST /v1/ehash/quotes/by-pubkey (pubkey, signature, message)
+    Mint->>Mint: Verify signature
+    Mint->>Mint: Query KV store for quote IDs
+    Mint->>Mint: Fetch quote details
+    Mint-->>ExternalWallet: QuoteQueryResponse (quote summaries)
+
+    Note over ExternalWallet: 6. Token Redemption
+    loop For each PAID quote
+        ExternalWallet->>ExternalWallet: Create blinded messages (normal secrets)
+        ExternalWallet->>ExternalWallet: Sign MintRequest (NUT-20 - proves pubkey ownership)
+        ExternalWallet->>Mint: POST /v1/mint (quote_id, blinded_messages, signature)
+        Mint->>Mint: Verify signature matches quote's locking pubkey
+        Mint-->>ExternalWallet: Blind signatures
+        ExternalWallet->>ExternalWallet: Unblind to get normal eHash tokens
+    end
+```
+
+### Cleanup and Maintenance
+
+**Optional Cleanup Strategy:**
+```rust
+impl MintHandler {
+    /// Remove pubkey-to-quote mapping when quote is fully redeemed or expired
+    async fn cleanup_quote_mapping(
+        &mut self,
+        pubkey: &PublicKey,
+        quote_id: &QuoteId,
+    ) -> Result<(), MintError> {
+        let pubkey_hex = hex::encode(pubkey.serialize());
+
+        let mut tx = self.mint_instance.localstore.begin_transaction().await?;
+        tx.kv_remove(
+            "ehash_pubkey_quotes",
+            &pubkey_hex,
+            &quote_id.to_string(),
+        ).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Periodic cleanup of expired quote mappings
+    async fn cleanup_expired_mappings(&mut self) -> Result<(), MintError> {
+        // List all pubkey namespaces
+        let pubkeys = self.mint_instance.localstore
+            .kv_list("ehash_pubkey_quotes", "")
+            .await?;
+
+        for pubkey_hex in pubkeys {
+            // Get all quote IDs for this pubkey
+            let quote_id_keys = self.mint_instance.localstore
+                .kv_list("ehash_pubkey_quotes", &pubkey_hex)
+                .await?;
+
+            for quote_id_key in quote_id_keys {
+                if let Ok(quote_id) = QuoteId::from_str(&quote_id_key) {
+                    // Check if quote is expired or fully redeemed
+                    if let Some(quote) = self.mint_instance.localstore
+                        .get_mint_quote(&quote_id)
+                        .await?
+                    {
+                        if quote.state() == MintQuoteState::Issued
+                            || SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() > quote.expiry
+                        {
+                            // Remove mapping for expired/redeemed quotes
+                            let pubkey = PublicKey::from_slice(
+                                &hex::decode(&pubkey_hex).unwrap()
+                            ).unwrap();
+                            self.cleanup_quote_mapping(&pubkey, &quote_id).await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Benefits
+
+- **Privacy**: Signature authentication prevents unauthorized snooping of quotes
+- **Security**: Only pubkey owners can discover their quotes (proof of ownership required)
+- **NUT-04 Compliant**: Random UUID quote IDs remain secret until authenticated query
+- **Scalable**: KV store indexes provide O(1) lookup by pubkey
+- **Recovery**: TProxy can rediscover quotes after restart by querying with signature
+- **External Wallet Support**: Any wallet with the private key can discover and redeem quotes

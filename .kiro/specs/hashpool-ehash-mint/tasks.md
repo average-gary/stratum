@@ -31,9 +31,11 @@ This document breaks down the eHash persistence implementation into small, focus
 ### 2.1 Define EHashMintData structure
 - [x] Create `common/ehash/src/types.rs` with `EHashMintData` struct
 - [x] Add all required fields (share_hash, channel_id, user_identity, target, sequence_number, etc.)
+- [x] Add required `locking_pubkey: bitcoin::secp256k1::PublicKey` field for per-share NUT-20 P2PK locking
 - [x] Implement Clone and Debug traits
-- **Requirements**: 1.2, 3.1
+- **Requirements**: 1.2, 2.1, 3.1
 - **Files**: `common/ehash/src/types.rs`
+- **Note**: Per NUT-04 and NUT-20, each share MUST include a locking pubkey. The pubkey is extracted from TLV field 0x0004 in SubmitSharesExtended messages.
 
 ### 2.2 Add EHashMintData helper methods
 - [x] Implement `calculate_ehash_amount(&self, min_leading_zeros: u32) -> Amount`
@@ -96,13 +98,14 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Requirements**: 1.2, 1.3
 - **Files**: `common/ehash/src/mint.rs`
 
-### 3.4 Implement P2PK token locking
-- [x] Add `register_channel_pubkey(channel_id, pubkey)` method
-- [x] Create SpendingConditions with P2PK locking
-- [x] Mint tokens with P2PK conditions using CDK
-- **Requirements**: 8.1, 8.2
+### 3.4 Implement NUT-04 and NUT-20 compliant P2PK quote creation
+- [x] Generate random UUID v4 quote IDs (NUT-04: prevents front-running attacks)
+- [x] Create PAID MintQuotes with per-share locking_pubkey from EHashMintData (NUT-20)
+- [x] Store share hash as payment proof for auditability
+- [x] Return empty proofs (wallet mints via NUT-20 authenticated flow)
+- **Requirements**: 2.1, 8.1, 8.2, 8.5, 8.6, 8.7, 8.8
 - **Files**: `common/ehash/src/mint.rs`
-- **Note**: P2PK locking implemented by storing locking pubkeys in PAID MintQuotes. External wallets query quotes by pubkey, create blinded messages with P2PK SpendingConditions, and receive P2PK-locked tokens via standard Cashu protocol. This approach maintains Cashu's privacy guarantees.
+- **Note**: Per NUT-04, quote IDs MUST be random and NOT derivable. Per NUT-20, P2PK locks enforce authentication. Each share has its own pubkey (per-share granularity). External wallets query quotes by pubkey, sign MintRequest with their private key, and receive P2PK-locked tokens after NUT-20 signature verification.
 
 ### 3.5 Add block found event handling
 - [x] Implement `handle_block_found(&mut self, data: &EHashMintData)`
@@ -140,11 +143,20 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Requirements**: 6.1, 6.5
 - **Files**: `common/ehash/src/mint.rs`
 
-### 3.10 Add MintHandler unit tests
-- [ ] Test CDK initialization and configuration
-- [ ] Test P2PK token creation
-- [ ] Test retry queue and backoff logic
-- [ ] Test graceful shutdown
+### 3.10 Add hpub utility functions
+- [ ] Create `common/ehash/src/hpub.rs` with hpub encoding/decoding functions
+- [ ] Implement `parse_hpub(hpub: &str) -> Result<PublicKey, Error>` with bech32 validation
+- [ ] Implement `encode_hpub(pubkey: &PublicKey) -> String` for configuration
+- [ ] Add validation for 'hpub' HRP and 33-byte pubkey length
+- [ ] Add unit tests for hpub encoding/decoding
+- **Requirements**: 2.1, 2.2, 2.3
+- **Files**: `common/ehash/src/hpub.rs`
+
+### 3.11 Add MintHandler unit tests
+- [x] Test CDK initialization and configuration
+- [x] Test P2PK token creation with per-share pubkeys
+- [x] Test retry queue and backoff logic
+- [x] Test graceful shutdown
 - **Requirements**: 1.5, 6.1
 - **Files**: `common/ehash/src/mint.rs`
 
@@ -243,23 +255,25 @@ This document breaks down the eHash persistence implementation into small, focus
 ### 5.3 Integrate mint_sender into Pool initialization
 - [ ] Modify Pool initialization to call spawn_mint_thread if configured
 - [ ] Pass mint_sender to ChannelManager
-- [ ] Add channel_pubkeys HashMap to ChannelManager
+- [ ] No channel_pubkeys HashMap needed (per-share pubkeys from TLV)
 - **Requirements**: 5.1
 - **Files**: `roles/pool/src/lib.rs`
 
-### 5.4 Add register_channel_pubkey to ChannelManager
-- [ ] Implement `register_channel_pubkey(channel_id, pubkey)` method
-- [ ] Store pubkeys in HashMap
-- [ ] Add `get_channel_locking_pubkey(channel_id)` accessor
-- **Requirements**: 2.4
+### 5.4 Add TLV pubkey extraction to ChannelManager
+- [ ] Implement `extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended)` method
+- [ ] Extract pubkey from TLV field 0x0004 (33-byte compressed secp256k1)
+- [ ] Validate TLV length and pubkey format
+- [ ] Return error if TLV missing or invalid
+- **Requirements**: 2.5, 2.6
 - **Files**: Pool ChannelManager implementation
 
-### 5.5 Hook share validation in handle_submit_shares_standard
+### 5.5 Hook share validation in handle_submit_shares_extended
 - [ ] Extract share hash from ShareValidationResult::Valid
-- [ ] Create EHashMintData with all required fields
+- [ ] Extract locking_pubkey from TLV field 0x0004
+- [ ] Create EHashMintData with all required fields including locking_pubkey
 - [ ] Send via mint_sender.try_send() (non-blocking)
 - [ ] Log errors but continue mining
-- **Requirements**: 1.2, 3.1, 3.3, 6.1
+- **Requirements**: 1.2, 2.5, 2.6, 3.1, 3.3, 6.1
 - **Files**: Pool message handler for SubmitSharesStandard
 
 ### 5.6 Hook share validation in handle_submit_shares_extended
@@ -353,55 +367,53 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Requirements**: 7.1, 7.2, 5.6
 - **Files**: JDC integration tests
 
-## Phase 8: SV2 Extension Protocol
+## Phase 8: Per-Share NUT-20 P2PK Protocol Implementation
 
-### 8.1 Define extension message types
-- [ ] Define extension type constant 0x0003 for eHash
-- [ ] Define TLV field types (0x01: locking_pubkey, 0x02: mint_url, 0x03: ehash_tokens_minted)
-- [ ] Add to protocol message definitions
-- **Requirements**: 2.1
-- **Files**: Protocol message definitions
+### 8.1 Add hpub validation to TProxy downstream connection handling
+- [ ] Implement hpub parsing from user_identity in OpenExtendedMiningChannel
+- [ ] Validate bech32 format with 'hpub' HRP
+- [ ] Extract secp256k1 public key from hpub
+- [ ] Disconnect client if hpub invalid (no jobs sent)
+- [ ] Store pubkey for channel if valid
+- **Requirements**: 2.1, 2.2, 2.3
+- **Files**: TProxy downstream connection handler
 
-### 8.2 Add extension negotiation to TProxy
-- [ ] Implement RequestExtensions message with [0x0003]
-- [ ] Handle RequestExtensions.Success response
-- [ ] Store extension_supported flag in TProxy context
-- **Requirements**: 2.1, 2.2
-- **Files**: TProxy connection setup
+### 8.2 Add TLV 0x0004 to SubmitSharesExtended in TProxy
+- [ ] Define TLV field type 0x0004 for per-share locking pubkey
+- [ ] Include 33-byte compressed secp256k1 pubkey in TLV when submitting upstream
+- [ ] Extract pubkey from channel's stored hpub
+- [ ] Add to SubmitSharesExtended message construction
+- **Requirements**: 2.5, 2.6
+- **Files**: TProxy upstream share submission
 
-### 8.3 Add locking_pubkey TLV to OpenMiningChannel
-- [ ] Include locking_pubkey as TLV field 0x0003|0x01 when extension supported
-- [ ] Encode pubkey as 33-byte compressed format
-- [ ] Handle missing TLV gracefully
-- **Requirements**: 2.4
-- **Files**: TProxy channel opening
+### 8.3 Add TLV 0x0004 extraction in Pool
+- [ ] Extract TLV field 0x0004 from SubmitSharesExtended messages
+- [ ] Validate TLV length (must be 33 bytes)
+- [ ] Parse secp256k1 public key from TLV value
+- [ ] Reject shares with missing or invalid TLV (for eHash)
+- **Requirements**: 2.6
+- **Files**: Pool share submission handler
 
-### 8.4 Process mint_url TLV from OpenMiningChannel.Success
-- [ ] Extract mint_url from TLV field 0x0003|0x02
-- [ ] Store mint_url in TProxy context
-- [ ] Configure wallet handler with mint_url if present
-- **Requirements**: 2.4, 8.1
-- **Files**: TProxy channel opening response handler
+### 8.4 Update Pool share validation to include TLV pubkey
+- [ ] Pass extracted pubkey from TLV to EHashMintData creation
+- [ ] Include locking_pubkey in all mint events
+- [ ] Ensure pubkey flows through to mint quote creation
+- **Requirements**: 2.6
+- **Files**: Pool share validation integration
 
-### 8.5 Register locking_pubkey in Pool ChannelManager
-- [ ] Extract locking_pubkey from OpenMiningChannel TLV
-- [ ] Call register_channel_pubkey(channel_id, pubkey)
-- [ ] Include mint_url in OpenMiningChannel.Success TLV
-- **Requirements**: 2.4
-- **Files**: Pool channel opening handler
+### 8.5 Add hpub configuration examples
+- [ ] Document hpub format in TProxy configuration
+- [ ] Provide example hpub values for testing
+- [ ] Document disconnection behavior for invalid hpub
+- **Requirements**: 2.1, 2.2, 2.3
+- **Files**: Configuration documentation, example configs
 
-### 8.6 Add ehash_tokens_minted TLV to SubmitSharesSuccess
-- [ ] Include ehash_tokens_minted as TLV field 0x0003|0x03
-- [ ] Track counter in ChannelManager per channel
-- [ ] Increment on successful mint operations
-- **Requirements**: 2.5
-- **Files**: Pool SubmitSharesSuccess response
-
-### 8.7 Add extension protocol tests
-- [ ] Test extension negotiation flow
-- [ ] Test TLV field encoding/decoding
-- [ ] Test backward compatibility without extension support
-- **Requirements**: 2.1, 2.2, 2.3, 2.6
+### 8.6 Add per-share protocol integration tests
+- [ ] Test hpub validation and disconnection on invalid format
+- [ ] Test TLV 0x0004 encoding/decoding
+- [ ] Test per-share pubkey extraction and mint quote creation
+- [ ] Test multi-miner support (different hpubs per downstream)
+- **Requirements**: 2.1, 2.5, 2.7, 2.8
 - **Files**: Protocol integration tests
 
 ## Phase 9: Integration Testing

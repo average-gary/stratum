@@ -15,6 +15,7 @@ use std::time::SystemTime;
 /// - Calculate the eHash amount based on share difficulty
 /// - Associate minted tokens with the correct channel and user
 /// - Handle block found events for keyset lifecycle management
+/// - Apply NUT-20 P2PK locks per-share for secure token redemption
 #[derive(Debug, Clone)]
 pub struct EHashMintData {
     /// The share hash returned from share validation
@@ -26,7 +27,9 @@ pub struct EHashMintData {
     /// The channel ID this share was submitted on
     pub channel_id: u32,
 
-    /// The user identity associated with this channel
+    /// The user identity associated with this channel (hpub format)
+    /// Format: bech32-encoded public key with 'hpub' HRP (Human Readable Part)
+    /// Example: "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k..."
     pub user_identity: String,
 
     /// The target difficulty for this share
@@ -43,6 +46,26 @@ pub struct EHashMintData {
 
     /// Optional coinbase data (only present for block found case)
     pub coinbase: Option<Vec<u8>>,
+
+    /// Locking pubkey for NUT-20 P2PK authentication (required per-share)
+    ///
+    /// This pubkey is extracted from:
+    /// 1. Downstream miner sets user_identity to their hpub (bech32 format) when connecting
+    /// 2. Proxy validates hpub format - INVALID = disconnect + no jobs
+    /// 3. Proxy extracts secp256k1 public key from hpub
+    /// 4. Proxy includes pubkey in SubmitSharesExtended TLV when submitting upstream
+    /// 5. Pool extracts pubkey from TLV and includes here
+    ///
+    /// Minted eHash tokens are always P2PK-locked to this public key.
+    /// The wallet must authenticate with the corresponding private key (NUT-20)
+    /// to mint tokens from the PAID quote.
+    ///
+    /// Each share MUST have a locking pubkey, enabling:
+    /// - Guaranteed security (all tokens are P2PK-locked)
+    /// - Per-share granularity (different keys for different shares)
+    /// - Key rotation (miners can change keys per share)
+    /// - Multi-miner support (proxy handles multiple downstream miners, each with own key)
+    pub locking_pubkey: bitcoin::secp256k1::PublicKey,
 }
 
 impl EHashMintData {
@@ -90,6 +113,13 @@ pub struct WalletCorrelationData {
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash as HashTrait;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+
+    fn test_pubkey() -> PublicKey {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        PublicKey::from_secret_key(&secp, &secret)
+    }
 
     #[test]
     fn test_ehash_mint_data_creation() {
@@ -98,17 +128,19 @@ mod tests {
             share_hash,
             block_found: false,
             channel_id: 1,
-            user_identity: "test_user".to_string(),
+            user_identity: "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k".to_string(),
             target: Target::MAX_ATTAINABLE_MAINNET,
             sequence_number: 42,
             timestamp: SystemTime::now(),
             template_id: None,
             coinbase: None,
+            locking_pubkey: test_pubkey(),
         };
 
         assert_eq!(data.channel_id, 1);
         assert_eq!(data.sequence_number, 42);
         assert!(!data.block_found);
+        assert!(data.locking_pubkey.serialize().len() == 33);
     }
 
     #[test]
@@ -122,12 +154,13 @@ mod tests {
             share_hash,
             block_found: false,
             channel_id: 1,
-            user_identity: "test_user".to_string(),
+            user_identity: "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k".to_string(),
             target: Target::MAX_ATTAINABLE_MAINNET,
             sequence_number: 1,
             timestamp: SystemTime::now(),
             template_id: None,
             coinbase: None,
+            locking_pubkey: test_pubkey(),
         };
 
         // 40 leading zeros - 32 minimum = 8, so 2^8 = 256
@@ -145,12 +178,13 @@ mod tests {
             share_hash,
             block_found: false,
             channel_id: 1,
-            user_identity: "test_user".to_string(),
+            user_identity: "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k".to_string(),
             target: Target::MAX_ATTAINABLE_MAINNET,
             sequence_number: 1,
             timestamp: SystemTime::now(),
             template_id: None,
             coinbase: None,
+            locking_pubkey: test_pubkey(),
         };
 
         // Below minimum threshold, should return 0
