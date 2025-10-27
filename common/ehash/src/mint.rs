@@ -273,11 +273,28 @@ impl MintHandler {
     /// # Errors
     /// Returns `MintError` if processing fails unrecoverably
     pub async fn run(&mut self) -> Result<(), MintError> {
-        // TODO: Implement main run loop
-        // This will be implemented in task 3.6
-        Err(MintError::ConfigError(
-            "MintHandler run loop not yet implemented".to_string(),
-        ))
+        tracing::info!("Starting MintHandler run loop...");
+
+        loop {
+            match self.receiver.recv().await {
+                Ok(data) => {
+                    // Process the mint data
+                    if let Err(e) = self.process_mint_data(data).await {
+                        tracing::error!("Error processing mint data: {}", e);
+                        // Continue processing other events even if one fails
+                        // This ensures mining operations are not affected by mint errors
+                    }
+                }
+                Err(_) => {
+                    // Channel closed, exit gracefully
+                    tracing::info!("MintHandler receiver channel closed, shutting down...");
+                    break;
+                }
+            }
+        }
+
+        tracing::info!("MintHandler run loop completed");
+        Ok(())
     }
 
     /// Main processing loop with graceful shutdown handling
@@ -1292,6 +1309,49 @@ mod tests {
             quote.is_none(),
             "No quote should be created for shares below eHash threshold"
         );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_shutdown_signal() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        let sender = handler.get_sender();
+        let (shutdown_tx, shutdown_rx) = async_channel::bounded(1);
+
+        // Spawn the run loop in a background task
+        let run_handle = tokio::spawn(async move {
+            handler.run_with_shutdown(shutdown_rx).await
+        });
+
+        // Send some test data
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+        };
+
+        sender.send(data).await.unwrap();
+
+        // Give it a moment to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Send shutdown signal
+        shutdown_tx.send(()).await.unwrap();
+
+        // Wait for run loop to complete
+        let result = run_handle.await.unwrap();
+        assert!(result.is_ok(), "Run with shutdown should complete gracefully");
     }
 
     // Note: Full integration tests with CDK Mint initialization and external wallet

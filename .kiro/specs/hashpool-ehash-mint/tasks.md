@@ -112,9 +112,9 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.6 Implement MintHandler run loop
-- [ ] Add `run(&mut self)` method with async channel receiver loop
-- [ ] Process incoming EHashMintData events
-- [ ] Call process_mint_data for each event
+- [x] Add `run(&mut self)` method with async channel receiver loop
+- [x] Process incoming EHashMintData events
+- [x] Call process_mint_data for each event
 - **Requirements**: 1.2, 3.3
 - **Files**: `common/ehash/src/mint.rs`
 
