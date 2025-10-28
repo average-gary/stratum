@@ -1,6 +1,6 @@
 use crate::{
     codec::{GetSize, SizeHint},
-    datatypes::{Signature, Sv2DataType, U32AsRef, B016M, B0255, B032, B064K, U24, U256},
+    datatypes::{PubKey33, Signature, Sv2DataType, U32AsRef, B016M, B0255, B032, B064K, U24, U256},
     Error,
 };
 use alloc::vec::Vec;
@@ -80,6 +80,7 @@ pub enum PrimitiveMarker {
     U24,
     U256,
     Signature,
+    PubKey33,
     U32,
     U32AsRef,
     F32,
@@ -123,6 +124,7 @@ pub enum DecodablePrimitive<'a> {
     U24(U24),
     U256(U256<'a>),
     Signature(Signature<'a>),
+    PubKey33(PubKey33<'a>),
     U32(u32),
     U32AsRef(U32AsRef<'a>),
     F32(f32),
@@ -163,6 +165,7 @@ impl SizeHint for PrimitiveMarker {
             Self::U24 => U24::size_hint(data, offset),
             Self::U256 => U256::size_hint(data, offset),
             Self::Signature => Signature::size_hint(data, offset),
+            Self::PubKey33 => PubKey33::size_hint(data, offset),
             Self::U32 => u32::size_hint(data, offset),
             Self::U32AsRef => U32AsRef::size_hint(data, offset),
             Self::F32 => f32::size_hint(data, offset),
@@ -256,6 +259,9 @@ impl PrimitiveMarker {
             Self::Signature => {
                 DecodablePrimitive::Signature(Signature::from_bytes_unchecked(&mut data[offset..]))
             }
+            Self::PubKey33 => {
+                DecodablePrimitive::PubKey33(PubKey33::from_bytes_unchecked(&mut data[offset..]))
+            }
             Self::U32 => DecodablePrimitive::U32(u32::from_bytes_unchecked(&mut data[offset..])),
             Self::U32AsRef => {
                 DecodablePrimitive::U32AsRef(U32AsRef::from_bytes_unchecked(&mut data[offset..]))
@@ -290,6 +296,9 @@ impl PrimitiveMarker {
             Self::Signature => Ok(DecodablePrimitive::Signature(Signature::from_reader_(
                 reader,
             )?)),
+            Self::PubKey33 => Ok(DecodablePrimitive::PubKey33(PubKey33::from_reader_(
+                reader,
+            )?)),
             Self::U32 => Ok(DecodablePrimitive::U32(u32::from_reader_(reader)?)),
             Self::U32AsRef => Ok(DecodablePrimitive::U32AsRef(U32AsRef::from_reader_(
                 reader,
@@ -313,6 +322,7 @@ impl GetSize for DecodablePrimitive<'_> {
             DecodablePrimitive::U24(v) => v.get_size(),
             DecodablePrimitive::U256(v) => v.get_size(),
             DecodablePrimitive::Signature(v) => v.get_size(),
+            DecodablePrimitive::PubKey33(v) => v.get_size(),
             DecodablePrimitive::U32(v) => v.get_size(),
             DecodablePrimitive::U32AsRef(v) => v.get_size(),
             DecodablePrimitive::F32(v) => v.get_size(),

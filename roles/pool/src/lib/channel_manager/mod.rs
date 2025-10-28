@@ -38,7 +38,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::PoolConfig,
     downstream::Downstream,
-    error::PoolResult,
+    error::{PoolError, PoolResult},
     status::{handle_error, Status, StatusSender},
     task_manager::TaskManager,
     utils::{Message, ShutdownMessage, VardiffKey},
@@ -529,6 +529,45 @@ impl ChannelManager {
 
         info!("Vardiff update cycle complete");
         Ok(())
+    }
+
+    /// Extract per-share locking pubkey from SubmitSharesExtended message
+    ///
+    /// This implements Phase 8 per-share NUT-20 P2PK locking pubkey extraction.
+    /// Each share submitted via SubmitSharesExtended includes the downstream
+    /// miner's locking pubkey (33-byte compressed secp256k1 PubKey33) in the locking_pubkey field.
+    ///
+    /// # Arguments
+    /// * `msg` - The SubmitSharesExtended message containing locking_pubkey field
+    ///
+    /// # Returns
+    /// * `Ok(PublicKey)` - Successfully extracted and validated pubkey
+    /// * `Err(PoolError)` - Locking pubkey is all zeros (not set) or invalid format
+    ///
+    /// # Requirements
+    /// - locking_pubkey must not be all zeros (indicates not set for eHash)
+    /// - locking_pubkey is always 33 bytes (PubKey33 fixed-size type)
+    /// - Pubkey bytes must form a valid secp256k1 compressed public key
+    pub fn extract_pubkey_from_share(
+        msg: &stratum_apps::stratum_core::mining_sv2::SubmitSharesExtended,
+    ) -> Result<bitcoin::secp256k1::PublicKey, PoolError> {
+        use bitcoin::secp256k1::PublicKey;
+
+        // Get locking pubkey bytes from PubKey33 (always 33 bytes fixed)
+        let pubkey_bytes: &[u8] = msg.locking_pubkey.inner_as_ref();
+
+        // Check if all zeros (indicates locking_pubkey not set for eHash)
+        if pubkey_bytes.iter().all(|&b| b == 0) {
+            return Err(PoolError::Custom(
+                "Locking pubkey not set (all zeros) in SubmitSharesExtended".to_string(),
+            ));
+        }
+
+        // PubKey33 is always 33 bytes, no need to validate length
+        // Parse secp256k1 public key from bytes (compressed SEC1 format)
+        PublicKey::from_slice(pubkey_bytes).map_err(|e| {
+            PoolError::Custom(format!("Invalid secp256k1 pubkey in locking_pubkey field: {}", e))
+        })
     }
 
     /// Gets a placeholder locking pubkey for Phase 5 (basic integration)

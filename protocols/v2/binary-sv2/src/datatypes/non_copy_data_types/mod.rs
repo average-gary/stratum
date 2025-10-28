@@ -55,6 +55,9 @@ pub type U256<'a> = Inner<'a, true, 32, 0, 0>;
 /// Type alias for a 32-byte public key represented using the `Inner` type
 /// with fixed-size configuration.
 pub type PubKey<'a> = Inner<'a, true, 32, 0, 0>;
+/// Type alias for a 33-byte compressed secp256k1 public key represented using the `Inner` type
+/// with fixed-size configuration (prefix byte + 32-byte X coordinate).
+pub type PubKey33<'a> = Inner<'a, true, 33, 0, 0>;
 /// Type alias for a 64-byte cryptographic signature represented using the
 /// `Inner` type with fixed-size configuration.
 pub type Signature<'a> = Inner<'a, true, 64, 0, 0>;

@@ -1,6 +1,6 @@
 use crate::{
     codec::GetSize,
-    datatypes::{Signature, Sv2DataType, U32AsRef, B016M, B0255, B032, B064K, U24, U256},
+    datatypes::{PubKey33, Signature, Sv2DataType, U32AsRef, B016M, B0255, B032, B064K, U24, U256},
     Error,
 };
 use alloc::vec::Vec;
@@ -82,6 +82,8 @@ pub enum EncodablePrimitive<'a> {
     U256(U256<'a>),
     /// Signature Primitive, representing a Signature type
     Signature(Signature<'a>),
+    /// PubKey33 Primitive, representing a 33-byte compressed secp256k1 public key
+    PubKey33(PubKey33<'a>),
     /// U32 Primitive, representing a u32 type
     U32(u32),
     /// U32AsRef Primitive, representing a U32AsRef type
@@ -115,6 +117,7 @@ impl EncodablePrimitive<'_> {
             Self::U24(v) => v.to_slice(dst),
             Self::U256(v) => v.to_slice(dst),
             Self::Signature(v) => v.to_slice(dst),
+            Self::PubKey33(v) => v.to_slice(dst),
             Self::U32(v) => v.to_slice(dst),
             Self::U32AsRef(v) => v.to_slice(dst),
             Self::F32(v) => v.to_slice(dst),
@@ -164,6 +167,7 @@ impl GetSize for EncodablePrimitive<'_> {
             Self::U24(v) => v.get_size(),
             Self::U256(v) => v.get_size(),
             Self::Signature(v) => v.get_size(),
+            Self::PubKey33(v) => v.get_size(),
             Self::U32(v) => v.get_size(),
             Self::U32AsRef(v) => v.get_size(),
             Self::F32(v) => v.get_size(),

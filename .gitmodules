@@ -7,3 +7,6 @@
 [submodule "deps/sv2-spec"]
 	path = deps/sv2-spec
 	url = https://github.com/stratum-mining/sv2-spec
+[submodule "deps/share-accounting-ext"]
+	path = deps/share-accounting-ext
+	url = https://github.com/demand-open-source/share-accounting-ext.git

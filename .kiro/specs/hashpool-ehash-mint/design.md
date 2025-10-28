@@ -60,10 +60,10 @@ sequenceDiagram
     Note over TProxy, Pool: 2. Mining Loop
     Pool->>TProxy: NewMiningJob
     Miner->>TProxy: SubmitShares
-    TProxy->>Pool: SubmitSharesExtended + TLV[0x0004: 33-byte pubkey]
+    TProxy->>Pool: SubmitSharesExtended.locking_pubkey = 33-byte pubkey
 
     Note over Pool, Mint: 3. Share Processing & NUT-20 P2PK Minting
-    Pool->>Pool: Extract pubkey from TLV 0x0004
+    Pool->>Pool: Extract pubkey from locking_pubkey field
     Pool->>Pool: Validate Share & Calculate eHash Amount
     Pool->>Mint: Create PAID MintQuote (quote_id=UUID_v4, pubkey=per_share_pubkey)
     Note over Mint: NUT-04: Random UUID prevents front-running<br/>NUT-20: P2PK lock enforces authentication
@@ -169,7 +169,7 @@ match res {
             sequence_number: msg.sequence_number,
             timestamp: SystemTime::now(),
             block_found: false,
-            locking_pubkey: self.extract_pubkey_from_tlv(&msg)?,  // From TLV 0x0004
+            locking_pubkey: self.extract_pubkey_from_share(&msg)?,  // From locking_pubkey field
         };
 
         // Send to dedicated Mint thread via async channel
@@ -193,7 +193,7 @@ match res {
             block_found: true,
             template_id: Some(template_id),
             coinbase: Some(coinbase.clone()),
-            locking_pubkey: self.extract_pubkey_from_tlv(&msg)?,  // From TLV 0x0004
+            locking_pubkey: self.extract_pubkey_from_share(&msg)?,  // From locking_pubkey field
         };
         
         // Send to Mint thread for both minting and keyset lifecycle
@@ -384,18 +384,27 @@ impl ChannelManager {
         self
     }
 
-    /// Extract per-share locking pubkey from SubmitSharesExtended TLV field 0x0004
-    fn extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended) -> Result<PublicKey, Error> {
-        let pubkey_tlv = msg.tlv_fields.iter()
-            .find(|tlv| tlv.type_ == 0x0004)
-            .ok_or(Error::MissingPubkeyTLV)?;
+    /// Extract per-share locking pubkey from SubmitSharesExtended locking_pubkey field
+    pub fn extract_pubkey_from_share(
+        msg: &stratum_apps::stratum_core::mining_sv2::SubmitSharesExtended,
+    ) -> Result<bitcoin::secp256k1::PublicKey, PoolError> {
+        use bitcoin::secp256k1::PublicKey;
 
-        if pubkey_tlv.length != 33 {
-            return Err(Error::InvalidTLVLength);
+        // Get locking pubkey bytes from PubKey33 (always 33 bytes fixed)
+        let pubkey_bytes: &[u8] = msg.locking_pubkey.inner_as_ref();
+
+        // Check if all zeros (indicates locking_pubkey not set for eHash)
+        if pubkey_bytes.iter().all(|&b| b == 0) {
+            return Err(PoolError::Custom(
+                "Locking pubkey not set (all zeros) in SubmitSharesExtended".to_string(),
+            ));
         }
 
-        PublicKey::from_slice(&pubkey_tlv.value)
-            .map_err(|_| Error::InvalidPubkey)
+        // PubKey33 is always 33 bytes, no need to validate length
+        // Parse secp256k1 public key from bytes (compressed SEC1 format)
+        PublicKey::from_slice(pubkey_bytes).map_err(|e| {
+            PoolError::Custom(format!("Invalid secp256k1 pubkey in locking_pubkey field: {}", e))
+        })
     }
 }
 
@@ -563,7 +572,7 @@ pub struct EHashMintData {
     pub coinbase: Option<Vec<u8>>,
 
     // Required per-share locking pubkey for NUT-20 P2PK authentication
-    // Extracted from SubmitSharesExtended TLV field 0x0004
+    // Extracted from SubmitSharesExtended.locking_pubkey field (PubKey33)
     pub locking_pubkey: bitcoin::secp256k1::PublicKey,
 }
 
@@ -1043,7 +1052,7 @@ Based on analysis of the hashpool submodule at `deps/hashpool`, the following ha
 ### Key Protocol Elements
 
 - **Locking Pubkeys**: Each downstream miner specifies their pubkey via user_identity (hpub format) at connection setup; enables NUT-20 authentication
-- **PAID Quotes**: Pool creates quotes in PAID status when shares are validated, with per-share locking pubkey from TLV
+- **PAID Quotes**: Pool creates quotes in PAID status when shares are validated, with per-share locking pubkey from direct PubKey33 field
 - **Channel/Sequence Correlation**: Unique identifiers (channel_id, sequence_number) for tracking shares
 - **Blinded Secrets**: Standard Cashu protocol for privacy-preserving token minting
 
@@ -1053,8 +1062,8 @@ This uses per-miner locking pubkeys for authentication:
 
 1. **Downstream Miners**: Each miner specifies their own locking pubkey in `user_identity` field (hpub format) when connecting to TProxy
 2. **TProxy**: Receives hpub from each downstream miner, validates format (disconnect if invalid), extracts secp256k1 pubkey, stores per-channel
-3. **Per-Share Submission**: TProxy includes the downstream miner's pubkey in TLV field 0x0004 when submitting shares upstream
-4. **Pool (Mool)**: Extracts pubkey from TLV 0x0004, includes in `EHashMintData.locking_pubkey`, creates NUT-20 P2PK-locked PAID quotes
+3. **Per-Share Submission**: TProxy sets `SubmitSharesExtended.locking_pubkey` (PubKey33 field) to the downstream miner's pubkey when submitting shares upstream
+4. **Pool (Mool)**: Extracts pubkey from `locking_pubkey` field, includes in `EHashMintData.locking_pubkey`, creates NUT-20 P2PK-locked PAID quotes
 5. **External Wallet**: Authenticates with their private key (NUT-20 signature), queries mint for quotes by their locking pubkey
 6. **Mint**: Verifies NUT-20 signature, returns quote IDs associated with authenticated pubkey
 7. **Multi-Miner Support**: TProxy can handle multiple downstream miners simultaneously, each with their own unique locking pubkey
@@ -1077,25 +1086,23 @@ Following the SV2 extension specification, eHash functionality will be implement
    Client <--- RequestExtensions.Success [0x0003] ---- Server
    ```
 
-### TLV Fields for eHash Protocol
+### Protocol Extension for eHash
 
-eHash uses TLV field 0x0004 for per-share pubkey locking:
+eHash extends `SubmitSharesExtended` with a direct `locking_pubkey` field for per-share pubkey locking:
 
-| Field Type | TLV Type | Message | Description |
-|------------|----------|---------|-------------|
-| `0x0004` | `0x0004` | `SubmitSharesExtended` | `locking_pubkey` - 33-byte compressed secp256k1 public key (per-share, TProxy→Pool) |
+| Field Name | Type | Message | Description |
+|------------|------|---------|-------------|
+| `locking_pubkey` | `PubKey33` | `SubmitSharesExtended` | 33-byte compressed secp256k1 public key (per-share, TProxy→Pool) |
 
-#### TLV Field 0x0004 Format
+#### PubKey33 Field Format
 
-**Type:** `0x0004` - eHash Locking Pubkey (per-share)
+**Type:** `PubKey33` - Fixed 33-byte public key field
 
 **Structure:**
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| type | u16 | 2 bytes | `0x0004` (eHash Locking Pubkey) |
-| length | u16 | 2 bytes | `33` (always 33 bytes for compressed pubkey) |
-| value | bytes | 33 bytes | Compressed secp256k1 public key (SEC1 format) |
+| locking_pubkey | PubKey33 | 33 bytes | Compressed secp256k1 public key (SEC1 format) |
 
 **Value Format (SEC1 Compressed):**
 
@@ -1125,12 +1132,9 @@ Example:
 - **TProxy**: If valid → store pubkey for the channel
 
 #### 2. Share Submission with Per-Share Pubkey
-- **TProxy → Pool**: `SubmitSharesExtended` with TLV:
-  ```
-  [0x0004] [0x0021] [33-byte compressed secp256k1 pubkey]
-  ```
+- **TProxy → Pool**: `SubmitSharesExtended` with `locking_pubkey` field set to 33-byte compressed secp256k1 pubkey
 - Each share includes the locking pubkey from the downstream miner's hpub
-- Pool extracts pubkey from TLV field 0x0004
+- Pool extracts pubkey from `locking_pubkey` field using `extract_pubkey_from_share()`
 
 #### 3. Share Response
 - **Pool → TProxy**: `SubmitSharesSuccess` (standard response)
@@ -1139,7 +1143,7 @@ Example:
 
 #### Implementation Examples
 
-**TProxy - Extract and Include Pubkey in TLV:**
+**TProxy - Extract and Include Pubkey in locking_pubkey Field:**
 ```rust
 // On downstream connection
 fn handle_open_channel(user_identity: String, channel_id: u32) -> Result<(), Error> {
@@ -1161,45 +1165,47 @@ fn submit_share_upstream(&self, channel_id: u32, share: Share) -> Result<(), Err
     // Get pubkey for this channel
     let pubkey = self.channel_pubkeys.get(&channel_id)?;
 
-    // Create TLV field 0x0004
-    let tlv = TLV {
-        type_: 0x0004,
-        length: 33,
-        value: pubkey.serialize(),  // 33-byte compressed SEC1 format
-    };
+    // Set locking_pubkey field (PubKey33) in SubmitSharesExtended
+    let mut extended_share = SubmitSharesExtended::from(share);
+    extended_share.locking_pubkey = PubKey33::from_slice(&pubkey.serialize())?;
 
-    // Submit with TLV
-    submit_shares_extended(share, vec![tlv])?;
+    // Submit with locking_pubkey set
+    submit_shares_extended(extended_share)?;
     Ok(())
 }
 ```
 
-**Pool - Extract Pubkey from TLV:**
+**Pool - Extract Pubkey from locking_pubkey Field:**
 ```rust
-fn extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended) -> Result<PublicKey, Error> {
-    // Find TLV field 0x0004
-    let pubkey_tlv = msg.tlv_fields.iter()
-        .find(|tlv| tlv.type_ == 0x0004)
-        .ok_or(Error::MissingPubkeyTLV)?;
+pub fn extract_pubkey_from_share(
+    msg: &SubmitSharesExtended,
+) -> Result<bitcoin::secp256k1::PublicKey, PoolError> {
+    use bitcoin::secp256k1::PublicKey;
 
-    // Validate length
-    if pubkey_tlv.length != 33 {
-        return Err(Error::InvalidTLVLength);
+    // Get locking pubkey bytes from PubKey33 (always 33 bytes fixed)
+    let pubkey_bytes: &[u8] = msg.locking_pubkey.inner_as_ref();
+
+    // Check if all zeros (indicates locking_pubkey not set for eHash)
+    if pubkey_bytes.iter().all(|&b| b == 0) {
+        return Err(PoolError::Custom(
+            "Locking pubkey not set (all zeros)".to_string(),
+        ));
     }
 
-    // Parse secp256k1 pubkey (SEC1 format)
-    PublicKey::from_slice(&pubkey_tlv.value)
-        .map_err(|_| Error::InvalidPubkey)
+    // Parse secp256k1 public key from bytes (compressed SEC1 format)
+    PublicKey::from_slice(pubkey_bytes).map_err(|e| {
+        PoolError::Custom(format!("Invalid secp256k1 pubkey: {}", e))
+    })
 }
 
 fn process_share(&self, share: SubmitSharesExtended) -> Result<(), Error> {
-    // Extract locking pubkey from TLV
-    let locking_pubkey = self.extract_pubkey_from_tlv(&share)?;
+    // Extract locking pubkey from locking_pubkey field
+    let locking_pubkey = Self::extract_pubkey_from_share(&share)?;
 
     // Validate share and create EHashMintData
     let mint_data = EHashMintData {
         // ... other fields ...
-        locking_pubkey,  // Required per-share pubkey from TLV
+        locking_pubkey,  // Required per-share pubkey from PubKey33 field
     };
 
     // Send to mint handler
@@ -1236,10 +1242,10 @@ async fn mint_ehash_tokens(&mut self, data: &EHashMintData) -> Result<Proofs, Mi
 
 1. **Connection Setup**: Miner specifies hpub in user_identity when connecting to TProxy
 2. **Validation**: TProxy parses and validates hpub format (disconnect if invalid)
-3. **Per-Share Submission**: TProxy includes locking pubkey from hpub in TLV field 0x0004
+3. **Per-Share Submission**: TProxy sets `SubmitSharesExtended.locking_pubkey` (PubKey33 field) from downstream miner's hpub
 4. **Quote Creation**: Pool/Mint creates PAID quotes with:
    - Random UUID v4 quote ID (NUT-04: prevents front-running)
-   - Per-share locking pubkey from TLV (NUT-20: authorization control)
+   - Per-share locking pubkey from PubKey33 field (NUT-20: authorization control)
    - Share hash as payment proof (auditability)
 5. **External Wallet Redemption**: Wallets use NUT-20 authenticated flow:
    - Query mint for quotes by locking pubkey (signature-authenticated)
@@ -1254,7 +1260,7 @@ async fn mint_ehash_tokens(&mut self, data: &EHashMintData) -> Result<Proofs, Mi
 
 - **Standards Compliant**: Follows established SV2 extension patterns
 - **Backward Compatible**: Non-eHash clients work normally
-- **Minimal Overhead**: Only adds TLV fields when extension is negotiated
+- **Minimal Overhead**: Only adds PubKey33 field to SubmitSharesExtended (33 bytes, always present)
 - **Clean Separation**: eHash logic is clearly separated from core mining protocol##
  eHash Keyset Lifecycle Management
 
@@ -1815,7 +1821,7 @@ sequenceDiagram
 
     Note over Miner, TProxy: 1. Share Submission
     Miner->>TProxy: SubmitShares
-    TProxy->>Pool: SubmitSharesExtended + TLV[0x0004: pubkey]
+    TProxy->>Pool: SubmitSharesExtended.locking_pubkey = pubkey
 
     Note over Pool, Mint: 2. Mint Creates Quote & Stores Mapping
     Pool->>Pool: Validate share, calculate eHash amount

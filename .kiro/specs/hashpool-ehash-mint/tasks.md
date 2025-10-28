@@ -35,7 +35,7 @@ This document breaks down the eHash persistence implementation into small, focus
 - [x] Implement Clone and Debug traits
 - **Requirements**: 1.2, 2.1, 3.1
 - **Files**: `common/ehash/src/types.rs`
-- **Note**: Per NUT-04 and NUT-20, each share MUST include a locking pubkey. The pubkey is extracted from TLV field 0x0004 in SubmitSharesExtended messages.
+- **Note**: Per NUT-04 and NUT-20, each share MUST include a locking pubkey. The pubkey is extracted from the direct `locking_pubkey: PubKey33` field in SubmitSharesExtended messages (see Task 5.4).
 
 ### 2.2 Add EHashMintData helper methods
 - [x] Implement `calculate_ehash_amount(&self, min_leading_zeros: u32) -> Amount`
@@ -274,33 +274,38 @@ This document breaks down the eHash persistence implementation into small, focus
 ### 5.3 Integrate mint_sender into Pool initialization
 - [ ] Modify Pool initialization to call spawn_mint_thread if configured
 - [ ] Pass mint_sender to ChannelManager
-- [ ] No channel_pubkeys HashMap needed (per-share pubkeys from TLV)
+- [ ] No channel_pubkeys HashMap needed (per-share pubkeys from direct PubKey33 field)
 - **Requirements**: 5.1
 - **Files**: `roles/pool/src/lib.rs`
+- **Implementation Note**: Uses direct PubKey33 field in SubmitSharesExtended (Task 5.4)
 
-### 5.4 Add TLV pubkey extraction to ChannelManager
-- [ ] Implement `extract_pubkey_from_tlv(&self, msg: &SubmitSharesExtended)` method
-- [ ] Extract pubkey from TLV field 0x0004 (33-byte compressed secp256k1)
-- [ ] Validate TLV length and pubkey format
-- [ ] Return error if TLV missing or invalid
+### 5.4 Add PubKey33 field to SubmitSharesExtended and extraction to ChannelManager
+- [x] Add PubKey33 type alias to binary-sv2 datatypes (33-byte compressed secp256k1)
+- [x] Implement full codec support for PubKey33 (Encodable, Decodable, GetMarker traits)
+- [x] Add `locking_pubkey: PubKey33<'decoder>` field to SubmitSharesExtended message
+- [x] Implement `extract_pubkey_from_share(&self, msg: &SubmitSharesExtended)` method in ChannelManager
+- [x] Validate pubkey format (reject all-zeros, validate secp256k1)
+- [x] Return error if pubkey missing or invalid
 - **Requirements**: 2.5, 2.6
-- **Files**: Pool ChannelManager implementation
+- **Files**: `protocols/v2/binary-sv2/src/datatypes/non_copy_data_types/mod.rs`, `protocols/v2/binary-sv2/src/codec/decodable.rs`, `protocols/v2/binary-sv2/src/codec/encodable.rs`, `protocols/v2/binary-sv2/src/codec/impls.rs`, `protocols/v2/subprotocols/mining/src/submit_shares.rs`, `roles/pool/src/lib/channel_manager/mod.rs`
+- **Implementation Note**: Used direct PubKey33 field instead of TLV 0x0004 for cleaner, more type-safe protocol extension. PubKey33 is a fixed-size 33-byte field integrated into the Stratum v2 codec system.
 
-### 5.5 Hook share validation in handle_submit_shares_extended
-- [ ] Extract share hash from ShareValidationResult::Valid
-- [ ] Extract locking_pubkey from TLV field 0x0004
-- [ ] Create EHashMintData with all required fields including locking_pubkey
-- [ ] Send via mint_sender.try_send() (non-blocking)
-- [ ] Log errors but continue mining
-- **Requirements**: 1.2, 2.5, 2.6, 3.1, 3.3, 6.1
-- **Files**: Pool message handler for SubmitSharesStandard
-
-### 5.6 Hook share validation in handle_submit_shares_extended
+### 5.5 Hook share validation in handle_submit_shares_standard
 - [ ] Extract share hash from ShareValidationResult::Valid
 - [ ] Create EHashMintData with all required fields
 - [ ] Send via mint_sender.try_send() (non-blocking)
 - [ ] Log errors but continue mining
 - **Requirements**: 1.2, 3.1, 3.3, 6.1
+- **Files**: Pool message handler for SubmitSharesStandard
+- **Implementation Note**: Standard channels don't include locking_pubkey (extended channels only)
+
+### 5.6 Hook share validation in handle_submit_shares_extended
+- [ ] Extract share hash from ShareValidationResult::Valid
+- [ ] Extract locking_pubkey from msg.locking_pubkey field using extract_pubkey_from_share()
+- [ ] Create EHashMintData with all required fields including locking_pubkey
+- [ ] Send via mint_sender.try_send() (non-blocking)
+- [ ] Log errors but continue mining
+- **Requirements**: 1.2, 2.5, 2.6, 3.1, 3.3, 6.1
 - **Files**: Pool message handler for SubmitSharesExtended
 
 ### 5.7 Handle BlockFound variant
@@ -397,24 +402,26 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Requirements**: 2.1, 2.2, 2.3
 - **Files**: TProxy downstream connection handler
 
-### 8.2 Add TLV 0x0004 to SubmitSharesExtended in TProxy
-- [ ] Define TLV field type 0x0004 for per-share locking pubkey
-- [ ] Include 33-byte compressed secp256k1 pubkey in TLV when submitting upstream
+### 8.2 Add locking_pubkey to SubmitSharesExtended in TProxy
+- [x] Use PubKey33 field in SubmitSharesExtended message (completed in Task 5.4)
 - [ ] Extract pubkey from channel's stored hpub
+- [ ] Set msg.locking_pubkey to 33-byte compressed secp256k1 pubkey when submitting upstream
 - [ ] Add to SubmitSharesExtended message construction
 - **Requirements**: 2.5, 2.6
 - **Files**: TProxy upstream share submission
+- **Implementation Note**: Uses direct PubKey33 field instead of TLV 0x0004
 
-### 8.3 Add TLV 0x0004 extraction in Pool
-- [ ] Extract TLV field 0x0004 from SubmitSharesExtended messages
-- [ ] Validate TLV length (must be 33 bytes)
-- [ ] Parse secp256k1 public key from TLV value
-- [ ] Reject shares with missing or invalid TLV (for eHash)
+### 8.3 Add locking_pubkey extraction in Pool
+- [x] PubKey33 field extraction implemented in Task 5.4 via extract_pubkey_from_share()
+- [x] Validation implemented (rejects all-zeros, validates secp256k1 format)
+- [ ] Integrate into share submission handler
 - **Requirements**: 2.6
-- **Files**: Pool share submission handler
+- **Files**: Pool share submission handler (completed in `roles/pool/src/lib/channel_manager/mod.rs:534-571`)
+- **Implementation Note**: Direct field extraction instead of TLV parsing
 
-### 8.4 Update Pool share validation to include TLV pubkey
-- [ ] Pass extracted pubkey from TLV to EHashMintData creation
+### 8.4 Update Pool share validation to include locking_pubkey
+- [ ] Call extract_pubkey_from_share() for SubmitSharesExtended messages
+- [ ] Pass extracted pubkey to EHashMintData creation
 - [ ] Include locking_pubkey in all mint events
 - [ ] Ensure pubkey flows through to mint quote creation
 - **Requirements**: 2.6
@@ -429,9 +436,11 @@ This document breaks down the eHash persistence implementation into small, focus
 
 ### 8.6 Add per-share protocol integration tests
 - [ ] Test hpub validation and disconnection on invalid format
-- [ ] Test TLV 0x0004 encoding/decoding
+- [ ] Test PubKey33 field encoding/decoding in SubmitSharesExtended
 - [ ] Test per-share pubkey extraction and mint quote creation
 - [ ] Test multi-miner support (different hpubs per downstream)
+- [ ] Test all-zeros pubkey rejection
+- [ ] Test invalid secp256k1 pubkey rejection
 - **Requirements**: 2.1, 2.5, 2.7, 2.8
 - **Files**: Protocol integration tests
 

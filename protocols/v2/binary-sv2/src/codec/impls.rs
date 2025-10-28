@@ -57,6 +57,11 @@ impl GetMarker for Signature<'_> {
         FieldMarker::Primitive(PrimitiveMarker::Signature)
     }
 }
+impl GetMarker for PubKey33<'_> {
+    fn get_marker() -> FieldMarker {
+        FieldMarker::Primitive(PrimitiveMarker::PubKey33)
+    }
+}
 impl GetMarker for B032<'_> {
     fn get_marker() -> FieldMarker {
         FieldMarker::Primitive(PrimitiveMarker::B032)
@@ -160,6 +165,15 @@ impl<'a> Decodable<'a> for U256<'a> {
 impl<'a> Decodable<'a> for Signature<'a> {
     fn get_structure(_: &[u8]) -> Result<Vec<FieldMarker>, Error> {
         Ok(vec![PrimitiveMarker::Signature.into()])
+    }
+
+    fn from_decoded_fields(mut data: Vec<DecodableField<'a>>) -> Result<Self, Error> {
+        data.pop().ok_or(Error::NoDecodableFieldPassed)?.try_into()
+    }
+}
+impl<'a> Decodable<'a> for PubKey33<'a> {
+    fn get_structure(_: &[u8]) -> Result<Vec<FieldMarker>, Error> {
+        Ok(vec![PrimitiveMarker::PubKey33.into()])
     }
 
     fn from_decoded_fields(mut data: Vec<DecodableField<'a>>) -> Result<Self, Error> {
@@ -306,6 +320,16 @@ impl<'a> TryFrom<DecodablePrimitive<'a>> for Signature<'a> {
         }
     }
 }
+impl<'a> TryFrom<DecodablePrimitive<'a>> for PubKey33<'a> {
+    type Error = Error;
+
+    fn try_from(value: DecodablePrimitive<'a>) -> Result<Self, Self::Error> {
+        match value {
+            DecodablePrimitive::PubKey33(val) => Ok(val),
+            _ => Err(Error::PrimitiveConversionError),
+        }
+    }
+}
 impl<'a> TryFrom<DecodablePrimitive<'a>> for B032<'a> {
     type Error = Error;
 
@@ -440,6 +464,16 @@ impl<'a> TryFrom<DecodableField<'a>> for U256<'a> {
     }
 }
 impl<'a> TryFrom<DecodableField<'a>> for Signature<'a> {
+    type Error = Error;
+
+    fn try_from(value: DecodableField<'a>) -> Result<Self, Self::Error> {
+        match value {
+            DecodableField::Primitive(p) => p.try_into(),
+            _ => Err(Error::DecodableConversionError),
+        }
+    }
+}
+impl<'a> TryFrom<DecodableField<'a>> for PubKey33<'a> {
     type Error = Error;
 
     fn try_from(value: DecodableField<'a>) -> Result<Self, Self::Error> {
@@ -637,6 +671,21 @@ impl<'a> TryFrom<EncodableField<'a>> for Signature<'a> {
         }
     }
 }
+impl<'a> From<PubKey33<'a>> for EncodableField<'a> {
+    fn from(v: PubKey33<'a>) -> Self {
+        EncodableField::Primitive(EncodablePrimitive::PubKey33(v))
+    }
+}
+impl<'a> TryFrom<EncodableField<'a>> for PubKey33<'a> {
+    type Error = Error;
+
+    fn try_from(value: EncodableField<'a>) -> Result<Self, Self::Error> {
+        match value {
+            EncodableField::Primitive(EncodablePrimitive::PubKey33(v)) => Ok(v),
+            _ => Err(Error::NonPrimitiveTypeCannotBeEncoded),
+        }
+    }
+}
 impl<'a> From<B032<'a>> for EncodableField<'a> {
     fn from(v: B032<'a>) -> Self {
         EncodableField::Primitive(EncodablePrimitive::B032(v))
@@ -758,6 +807,12 @@ impl From<U24> for FieldMarker {
 impl<'a> From<Inner<'a, true, 32, 0, 0>> for FieldMarker {
     fn from(_: Inner<'a, true, 32, 0, 0>) -> Self {
         FieldMarker::Primitive(PrimitiveMarker::U256)
+    }
+}
+
+impl<'a> From<Inner<'a, true, 33, 0, 0>> for FieldMarker {
+    fn from(_: Inner<'a, true, 33, 0, 0>) -> Self {
+        FieldMarker::Primitive(PrimitiveMarker::PubKey33)
     }
 }
 

@@ -1,5 +1,5 @@
 use alloc::{fmt, vec::Vec};
-use binary_sv2::{self, Deserialize, Serialize, Str0255, B032};
+use binary_sv2::{self, Deserialize, Serialize, Str0255, B032, PubKey33};
 use core::convert::TryInto;
 
 /// Message used by downstream to send result of its hashing work to an upstream.
@@ -70,6 +70,14 @@ pub struct SubmitSharesExtended<'decoder> {
     /// The size of the provided extranonce must be equal to the negotiated extranonce size from
     /// channel opening flow.
     pub extranonce: B032<'decoder>,
+    /// Per-share locking pubkey for eHash NUT-20 P2PK authentication (PubKey33)
+    ///
+    /// Contains a 33-byte compressed secp256k1 public key (0x02 or 0x03 prefix + 32-byte X coordinate)
+    /// for Cashu/NUT-20 P2PK authentication. This is a fixed-size field that must always contain
+    /// exactly 33 bytes. Set to all zeros (0x00...00) when not used for eHash minting.
+    /// This enables per-share authorization control for eHash token minting.
+    /// TProxy extracts this from downstream miner's hpub (user_identity) and includes it here.
+    pub locking_pubkey: PubKey33<'decoder>,
 }
 
 impl fmt::Display for SubmitSharesExtended<'_> {

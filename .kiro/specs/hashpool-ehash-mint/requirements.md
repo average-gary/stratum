@@ -30,8 +30,8 @@ This feature implements hashpool.dev, a system that integrates Cashu ecash minti
 2. WHEN TProxy receives OpenExtendedMiningChannel with user_identity THEN it SHALL parse and validate the hpub format
 3. WHEN hpub validation fails THEN TProxy SHALL disconnect the miner and SHALL NOT provide jobs
 4. WHEN hpub validation succeeds THEN TProxy SHALL extract the secp256k1 public key and store it for the channel
-5. WHEN TProxy submits shares upstream via SubmitSharesExtended THEN it SHALL include the locking pubkey in TLV field 0x0004 (33-byte compressed secp256k1 pubkey)
-6. WHEN the Pool receives SubmitSharesExtended THEN it SHALL extract the locking pubkey from TLV field 0x0004 and include it in EHashMintData
+5. WHEN TProxy submits shares upstream via SubmitSharesExtended THEN it SHALL include the locking pubkey in the direct `locking_pubkey: PubKey33` field (33-byte compressed secp256k1 pubkey)
+6. WHEN the Pool receives SubmitSharesExtended THEN it SHALL extract the locking pubkey from the `locking_pubkey` field and include it in EHashMintData
 7. WHEN multiple downstream miners connect THEN each miner SHALL have their own unique locking pubkey enabling multi-miner proxy support
 8. WHEN miners submit multiple shares THEN each share MAY have a different locking pubkey enabling per-share key rotation
 

@@ -47,7 +47,6 @@ use crate::config::MintConfig;
 use crate::error::MintError;
 use crate::types::EHashMintData;
 use async_channel::{Receiver, Sender};
-use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 use cdk::amount::Amount;
 use cdk::mint::MintBuilder;
 use cdk::nuts::{CurrencyUnit, PaymentMethod, Proofs, PublicKey as CdkPublicKey};
