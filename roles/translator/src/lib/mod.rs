@@ -105,30 +105,6 @@ impl TranslatorSv2 {
             }
         };
 
-        // Spawn wallet thread if eHash wallet is configured
-        let wallet_sender = if let Some(ref wallet_config) = self.config.ehash_wallet {
-            info!("eHash wallet configured, spawning WalletHandler thread...");
-            match spawn_wallet_thread(
-                task_manager.clone(),
-                wallet_config.clone(),
-                status_sender.clone(),
-            )
-            .await
-            {
-                Ok(sender) => {
-                    info!("WalletHandler thread spawned successfully");
-                    Some(sender)
-                }
-                Err(e) => {
-                    error!("Failed to spawn WalletHandler thread: {}", e);
-                    warn!("Continuing without eHash wallet support");
-                    None
-                }
-            }
-        } else {
-            debug!("No eHash wallet configured, skipping WalletHandler");
-            None
-        };
 
         let channel_manager = Arc::new(ChannelManager::new(
             channel_manager_to_upstream_sender,
@@ -140,7 +116,6 @@ impl TranslatorSv2 {
             } else {
                 ChannelMode::NonAggregated
             },
-            wallet_sender,
         ));
 
         let downstream_addr = SocketAddr::new(

@@ -65,7 +65,6 @@ impl ChannelManager {
     /// * `sv1_server_sender` - Channel to send messages to SV1 server
     /// * `sv1_server_receiver` - Channel to receive messages from SV1 server
     /// * `mode` - Operating mode (Aggregated or NonAggregated)
-    /// * `wallet_sender` - Optional sender for eHash wallet correlation events
     ///
     /// # Returns
     /// A new ChannelManager instance ready to handle message routing
@@ -75,7 +74,6 @@ impl ChannelManager {
         sv1_server_sender: Sender<Mining<'static>>,
         sv1_server_receiver: Receiver<Mining<'static>>,
         mode: ChannelMode,
-        wallet_sender: Option<async_channel::Sender<ehash_integration::WalletCorrelationData>>,
     ) -> Self {
         let channel_state = ChannelState::new(
             upstream_sender,
@@ -83,7 +81,7 @@ impl ChannelManager {
             sv1_server_sender,
             sv1_server_receiver,
         );
-        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode, wallet_sender)));
+        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode)));
         Self {
             channel_state,
             channel_manager_data,
@@ -433,11 +431,16 @@ impl ChannelManager {
                 // Update the message with the adjusted extranonce size for upstream
                 open_channel_msg.min_extranonce_size = upstream_min_extranonce_size as u16;
 
-                // Store the user identity, hashrate, and original downstream extranonce size
+                // Store the user identity, hashrate, original downstream extranonce size,
+                // downstream_id (from request_id), and a placeholder pubkey (will be extracted later)
+                // Note: In OpenExtendedMiningChannel, request_id IS the downstream_id
+                let downstream_id = open_channel_msg.request_id;
+                let placeholder_pubkey = crate::config::TranslatorConfig::null_locking_pubkey();
+
                 self.channel_manager_data.super_safe_lock(|c| {
                     c.pending_channels.insert(
                         open_channel_msg.request_id,
-                        (user_identity, hashrate, min_extranonce_size),
+                        (user_identity.clone(), hashrate, min_extranonce_size, downstream_id, placeholder_pubkey),
                     );
                 });
 
@@ -574,6 +577,10 @@ impl ChannelManager {
                         "SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
                         m.channel_id, m.sequence_number
                     );
+
+                    // Share already includes locking_pubkey - no correlation tracking needed
+                    // Pool will mint eHash to that pubkey
+
                     let frame: StdFrame = Message::Mining(Mining::SubmitSharesExtended(m))
                         .try_into()
                         .map_err(TproxyError::ParserError)?;
@@ -676,7 +683,6 @@ mod tests {
             sv1_server_sender,
             sv1_server_receiver,
             mode,
-            None, // No wallet_sender in tests
         )
     }
 

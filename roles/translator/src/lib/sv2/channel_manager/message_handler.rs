@@ -54,7 +54,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         m: OpenExtendedMiningChannelSuccess<'_>,
     ) -> Result<(), Self::Error> {
         // Check if we have the pending channel data, return error if not
-        let (user_identity, nominal_hashrate, downstream_extranonce_len) = self
+        let (user_identity, nominal_hashrate, downstream_extranonce_len, _downstream_id, _placeholder_pubkey): (String, f32, usize, u32, _) = self
             .channel_manager_data
             .safe_lock(|channel_manager_data| {
                 channel_manager_data.pending_channels.remove(&m.request_id)
@@ -67,6 +67,20 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 error!("No pending channel found for request_id: {}", m.request_id);
                 TproxyError::PendingChannelNotFound(m.request_id)
             })?;
+
+        // Extract locking_pubkey from user_identity (hpub format)
+        // Try to parse as hpub; if it fails, use null pubkey
+        let locking_pubkey = ehash_integration::hpub::parse_hpub(&user_identity)
+            .unwrap_or_else(|e| {
+                debug!(
+                    "Failed to parse hpub from user_identity '{}': {:?}, using null pubkey",
+                    user_identity, e
+                );
+                crate::config::TranslatorConfig::null_locking_pubkey()
+            });
+
+        // Save channel_id before m is moved
+        let channel_id = m.channel_id;
 
         let success = self
             .channel_manager_data
@@ -228,6 +242,19 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 TproxyError::PoisonLock
             })?;
 
+        // Store channel eHash metadata (locking_pubkey for share forwarding)
+        self.channel_manager_data.super_safe_lock(|data| {
+            use crate::sv2::channel_manager::data::ChannelEHashData;
+            data.channel_ehash_data.insert(
+                channel_id,
+                ChannelEHashData { locking_pubkey }
+            );
+            debug!(
+                "Stored locking_pubkey for channel_id={}",
+                channel_id
+            );
+        });
+
         self.channel_state
             .sv1_server_sender
             .send(Mining::OpenExtendedMiningChannelSuccess(success.clone()))
@@ -291,52 +318,10 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         _server_id: Option<usize>,
         m: SubmitSharesSuccess,
     ) -> Result<(), Self::Error> {
-        info!("Received: {} ✅", m);
+        info!("Received SubmitSharesSuccess: channel_id={}, last_sequence_number={} ✅",
+            m.channel_id, m.last_sequence_number);
 
-        // TODO: Full per-downstream correlation requires tracking sequence_number -> downstream_id
-        // For now, we log that wallet correlation would happen here.
-        // Implementation notes:
-        // 1. Need to track sequence_number -> (downstream_id, locking_pubkey) when shares are forwarded
-        // 2. Look up that mapping here to get the correct downstream miner's data
-        // 3. Extract ehash_tokens_minted from TLV field (default 0 if not present)
-        // 4. Create WalletCorrelationData with:
-        //    - channel_id: m.channel_id
-        //    - sequence_number: m.last_sequence_number
-        //    - user_identity: from channel data or downstream mapping
-        //    - timestamp: SystemTime::now()
-        //    - ehash_tokens_minted: extracted from TLV or 0
-        //    - locking_pubkey: from downstream mapping
-        // 5. Send via wallet_sender.try_send() if wallet_sender is Some
-
-        // Check if wallet_sender is configured
-        let wallet_sender_opt = self
-            .channel_manager_data
-            .super_safe_lock(|data| data.wallet_sender.clone());
-
-        if let Some(wallet_sender) = wallet_sender_opt {
-            // Placeholder implementation - needs proper downstream correlation tracking
-            debug!(
-                "Would send wallet correlation for channel_id={}, last_sequence_number={}",
-                m.channel_id, m.last_sequence_number
-            );
-            debug!("Full per-downstream correlation tracking not yet implemented");
-
-            // TODO: Uncomment and implement once downstream correlation tracking is added
-            // let correlation_data = WalletCorrelationData {
-            //     channel_id: m.channel_id,
-            //     sequence_number: m.last_sequence_number,
-            //     user_identity: /* lookup from tracking */,
-            //     timestamp: SystemTime::now(),
-            //     ehash_tokens_minted: /* extract from TLV or default 0 */,
-            //     locking_pubkey: /* lookup from tracking */,
-            // };
-            //
-            // if let Err(e) = wallet_sender.try_send(correlation_data) {
-            //     warn!("Failed to send wallet correlation data: {}", e);
-            // }
-
-            let _ = wallet_sender; // Suppress unused variable warning
-        }
+        // TODO: Could extract ehash_tokens_minted from TLV for aggregate monitoring stats
 
         Ok(())
     }

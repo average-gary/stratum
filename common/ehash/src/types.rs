@@ -91,6 +91,9 @@ impl EHashMintData {
 /// - How many eHash tokens were minted for the channel
 /// - Correlation between channel/sequence and minted tokens
 /// - Which locking pubkey was used (for multi-miner proxy support)
+///
+/// Note: user_identity can be derived from locking_pubkey (encoded as hpub) when needed
+/// for display purposes, eliminating data redundancy.
 #[derive(Debug, Clone)]
 pub struct WalletCorrelationData {
     /// The channel ID this share was submitted on
@@ -99,9 +102,6 @@ pub struct WalletCorrelationData {
     /// The sequence number of this share submission
     pub sequence_number: u32,
 
-    /// The user identity associated with this channel (hpub format)
-    pub user_identity: String,
-
     /// When this correlation event was created
     pub timestamp: SystemTime,
 
@@ -109,8 +109,9 @@ pub struct WalletCorrelationData {
     /// (extracted from SubmitSharesSuccess TLV field 0x0003|0x03)
     pub ehash_tokens_minted: u32,
 
-    /// Locking pubkey for this downstream miner (extracted from hpub in user_identity)
+    /// Locking pubkey for this downstream miner
     /// This enables TProxy to track eHash accounting per downstream miner pubkey
+    /// Can be encoded as hpub for display purposes when needed
     pub locking_pubkey: bitcoin::secp256k1::PublicKey,
 }
 

@@ -248,11 +248,15 @@ impl WalletHandler {
         let ehash_amount = data.ehash_tokens_minted as u64;
         *self.ehash_balances.entry(data.locking_pubkey).or_insert(0) += ehash_amount;
 
+        // Derive user_identity from locking_pubkey (encode as hpub for display)
+        let user_identity = crate::hpub::encode_hpub(&data.locking_pubkey)
+            .unwrap_or_else(|_| format!("pubkey_{:?}", data.locking_pubkey));
+
         // Update channel statistics
         let stats = self.channel_stats.entry(data.channel_id).or_insert(ChannelStats {
             channel_id: data.channel_id,
             locking_pubkey: data.locking_pubkey,
-            user_identity: data.user_identity.clone(),
+            user_identity: user_identity.clone(),
             total_ehash: 0,
             share_count: 0,
             last_share_time: data.timestamp,
@@ -265,7 +269,7 @@ impl WalletHandler {
         tracing::info!(
             target: "wallet_handler",
             "Updated eHash balance for {}: +{} (total: {})",
-            data.user_identity,
+            user_identity,
             ehash_amount,
             stats.total_ehash
         );

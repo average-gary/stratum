@@ -5,11 +5,11 @@ use std::{
 use stratum_apps::{
     custom_mutex::Mutex,
     stratum_core::{
-        channels_sv2::client::extended::ExtendedChannel, mining_sv2::ExtendedExtranonce,
+        bitcoin::secp256k1::PublicKey,
+        channels_sv2::client::extended::ExtendedChannel,
+        mining_sv2::ExtendedExtranonce,
     },
 };
-use async_channel::Sender;
-use ehash_integration::WalletCorrelationData;
 
 /// Defines the operational mode for channel management.
 ///
@@ -29,6 +29,15 @@ pub enum ChannelMode {
     NonAggregated,
 }
 
+/// eHash-specific metadata for a channel.
+///
+/// Stores the locking pubkey needed when forwarding shares upstream.
+#[derive(Debug, Clone)]
+pub struct ChannelEHashData {
+    /// The locking pubkey for eHash minting (extracted from user_identity hpub)
+    pub locking_pubkey: PublicKey,
+}
+
 /// Internal data structure for the ChannelManager.
 ///
 /// This struct maintains all the state needed for SV2 channel management,
@@ -36,9 +45,9 @@ pub enum ChannelMode {
 /// data structures like extranonce factories for aggregated mode.
 #[derive(Debug, Clone)]
 pub struct ChannelManagerData {
-    /// Store pending channel info by downstream_id: (user_identity, hashrate,
-    /// downstream_extranonce_len)
-    pub pending_channels: HashMap<u32, (String, f32, usize)>,
+    /// Store pending channel info by request_id: (user_identity, hashrate,
+    /// downstream_extranonce_len, downstream_id, locking_pubkey)
+    pub pending_channels: HashMap<u32, (String, f32, usize, u32, PublicKey)>,
     /// Map of active extended channels by channel ID
     pub extended_channels: HashMap<u32, Arc<RwLock<ExtendedChannel<'static>>>>,
     /// The upstream extended channel used in aggregated mode
@@ -54,10 +63,10 @@ pub struct ChannelManagerData {
     /// Per-channel extranonce factories for non-aggregated mode when extranonce adjustment is
     /// needed
     pub extranonce_factories: Option<HashMap<u32, Arc<Mutex<ExtendedExtranonce>>>>,
-    /// Optional sender for eHash wallet correlation events.
-    /// If Some, the ChannelManager will forward SubmitSharesSuccess messages
-    /// to the WalletHandler thread for eHash accounting.
-    pub wallet_sender: Option<Sender<WalletCorrelationData>>,
+    /// Maps channel_id -> ChannelEHashData for storing eHash-specific channel metadata.
+    /// This persists for the lifetime of the channel and is used to get the locking_pubkey
+    /// when forwarding SubmitSharesExtended upstream.
+    pub channel_ehash_data: HashMap<u32, ChannelEHashData>,
 }
 
 impl ChannelManagerData {
@@ -65,11 +74,10 @@ impl ChannelManagerData {
     ///
     /// # Arguments
     /// * `mode` - The operational mode (Aggregated or NonAggregated)
-    /// * `wallet_sender` - Optional sender for eHash wallet correlation events
     ///
     /// # Returns
     /// A new ChannelManagerData instance with empty state
-    pub fn new(mode: ChannelMode, wallet_sender: Option<Sender<WalletCorrelationData>>) -> Self {
+    pub fn new(mode: ChannelMode) -> Self {
         Self {
             pending_channels: HashMap::new(),
             extended_channels: HashMap::new(),
@@ -78,7 +86,7 @@ impl ChannelManagerData {
             mode,
             share_sequence_counters: HashMap::new(),
             extranonce_factories: None,
-            wallet_sender,
+            channel_ehash_data: HashMap::new(),
         }
     }
 
@@ -101,6 +109,7 @@ impl ChannelManagerData {
         self.extranonce_prefix_factory = None;
         self.share_sequence_counters.clear();
         self.extranonce_factories = None;
+        self.channel_ehash_data.clear();
         // Note: we intentionally preserve `mode` as it's a configuration setting
     }
 

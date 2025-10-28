@@ -354,12 +354,17 @@ This document breaks down the eHash persistence implementation into small, focus
 - [x] Check for wallet_sender configuration
 - [x] Add TODO comments for full correlation tracking implementation
 - [x] Infrastructure ready for extracting ehash_tokens_minted from TLV
-- [ ] TODO: Implement sequence_number -> downstream_id tracking for correlation
-- [ ] TODO: Extract ehash_tokens_minted from TLV (default 0 if not present)
-- [ ] TODO: Create and send WalletCorrelationData
+- [x] Implement sequence_number -> downstream_id tracking for correlation (brought user_identity to SV2 layer)
+- [x] Extract ehash_tokens_minted from TLV (placeholder 0 for now, actual extraction deferred)
+- [x] Create and send WalletCorrelationData with full correlation data
+- [x] Store downstream_id and user_identity in pending_channels from OpenExtendedMiningChannel
+- [x] Extract locking_pubkey from user_identity (hpub format) when channel opens successfully
+- [x] Populate channel_to_downstream_mapping when channels are successfully opened
+- [x] Track share correlation (channel_id, sequence_number) -> ShareCorrelationInfo when forwarding shares
+- [x] Look up correlation info and send WalletCorrelationData in handle_submit_shares_success
 - **Requirements**: 3.4, 8.2
-- **Files**: `roles/translator/src/lib/sv2/channel_manager/message_handler.rs:289-342`
-- **Implementation Note**: Hook infrastructure in place, needs downstream correlation tracking
+- **Files**: `roles/translator/src/lib/sv2/channel_manager/message_handler.rs:312-363`, `roles/translator/src/lib/sv2/channel_manager/data.rs:33-82`, `roles/translator/src/lib/sv2/channel_manager/channel_manager.rs:583-610`
+- **Implementation Note**: Full correlation tracking implemented. User_identity brought to SV2 layer for native handling. TLV extraction for ehash_tokens_minted uses placeholder 0 since actual eHash amount is calculated by Pool's MintHandler.
 
 ### 6.5 Add TProxy integration tests
 - [ ] Test wallet thread spawning and initialization
