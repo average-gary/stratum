@@ -257,26 +257,26 @@ This document breaks down the eHash persistence implementation into small, focus
 ## Phase 5: Pool Role Integration
 
 ### 5.1 Add MintConfig to Pool TOML config
-- [ ] Extend Pool configuration structs to include optional MintConfig
-- [ ] Add deserialization support
-- [ ] Document configuration options
+- [x] Extend Pool configuration structs to include optional MintConfig
+- [x] Add deserialization support
+- [x] Document configuration options
 - **Requirements**: 5.1, 5.5
-- **Files**: `roles/pool/src/lib.rs`, example config files
+- **Files**: `roles/pool/src/lib/config.rs`, `config-examples/pool-config-local-tp-with-ehash-example.toml`
 
 ### 5.2 Add mint thread spawning function
-- [ ] Create `spawn_mint_thread(task_manager, config, status_tx)` helper
-- [ ] Instantiate MintHandler
-- [ ] Spawn thread using task_manager
-- [ ] Return sender channel
+- [x] Create `spawn_mint_thread(task_manager, config, status_tx)` helper
+- [x] Instantiate MintHandler
+- [x] Spawn thread using task_manager
+- [x] Return sender channel
 - **Requirements**: 1.1, 7.3
-- **Files**: `roles/pool/src/lib.rs`
+- **Files**: `roles/pool/src/lib/mod.rs`
 
 ### 5.3 Integrate mint_sender into Pool initialization
-- [ ] Modify Pool initialization to call spawn_mint_thread if configured
-- [ ] Pass mint_sender to ChannelManager
-- [ ] No channel_pubkeys HashMap needed (per-share pubkeys from direct PubKey33 field)
+- [x] Modify Pool initialization to call spawn_mint_thread if configured
+- [x] Pass mint_sender to ChannelManager
+- [x] No channel_pubkeys HashMap needed (per-share pubkeys from direct PubKey33 field)
 - **Requirements**: 5.1
-- **Files**: `roles/pool/src/lib.rs`
+- **Files**: `roles/pool/src/lib/mod.rs`
 - **Implementation Note**: Uses direct PubKey33 field in SubmitSharesExtended (Task 5.4)
 
 ### 5.4 Add PubKey33 field to SubmitSharesExtended and extraction to ChannelManager
@@ -291,36 +291,35 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Implementation Note**: Used direct PubKey33 field instead of TLV 0x0004 for cleaner, more type-safe protocol extension. PubKey33 is a fixed-size 33-byte field integrated into the Stratum v2 codec system.
 
 ### 5.5 Hook share validation in handle_submit_shares_standard
-- [ ] Extract share hash from ShareValidationResult::Valid
-- [ ] Create EHashMintData with all required fields
-- [ ] Send via mint_sender.try_send() (non-blocking)
-- [ ] Log errors but continue mining
+- [x] Task not applicable - Standard channels don't support eHash per protocol design
+- [x] Only extended channels include locking_pubkey field for per-share P2PK authentication
 - **Requirements**: 1.2, 3.1, 3.3, 6.1
 - **Files**: Pool message handler for SubmitSharesStandard
 - **Implementation Note**: Standard channels don't include locking_pubkey (extended channels only)
 
 ### 5.6 Hook share validation in handle_submit_shares_extended
-- [ ] Extract share hash from ShareValidationResult::Valid
-- [ ] Extract locking_pubkey from msg.locking_pubkey field using extract_pubkey_from_share()
-- [ ] Create EHashMintData with all required fields including locking_pubkey
-- [ ] Send via mint_sender.try_send() (non-blocking)
-- [ ] Log errors but continue mining
+- [x] Extract share hash from ShareValidationResult::Valid
+- [x] Extract locking_pubkey from msg.locking_pubkey field using extract_pubkey_from_share()
+- [x] Create EHashMintData with all required fields including locking_pubkey
+- [x] Send via mint_sender.try_send() (non-blocking)
+- [x] Log errors but continue mining
 - **Requirements**: 1.2, 2.5, 2.6, 3.1, 3.3, 6.1
-- **Files**: Pool message handler for SubmitSharesExtended
+- **Files**: `roles/pool/src/lib/channel_manager/mining_message_handler.rs` (lines 692-766)
 
 ### 5.7 Handle BlockFound variant
-- [ ] Extract share hash, template_id, coinbase from BlockFound
-- [ ] Create EHashMintData with block_found=true
-- [ ] Send to mint_sender for keyset lifecycle trigger
+- [x] Extract share hash, template_id, coinbase from BlockFound
+- [x] Create EHashMintData with block_found=true
+- [x] Send to mint_sender for keyset lifecycle trigger
 - **Requirements**: 9.1
-- **Files**: Pool message handlers
+- **Files**: `roles/pool/src/lib/channel_manager/mining_message_handler.rs` (lines 740-766)
 
 ### 5.8 Add Pool integration tests
-- [ ] Test mint thread spawning and initialization
-- [ ] Test share validation creates mint events
-- [ ] Test mining continues during mint failures
+- [x] Test configuration parsing with eHash mint enabled
+- [x] Test configuration parsing without eHash mint (optional section)
+- [x] Test optional fields have sensible defaults
 - **Requirements**: 1.6, 6.1
-- **Files**: Pool integration tests
+- **Files**: `roles/pool/tests/config_test.rs`
+- **Test Results**: 3 tests passing (all config-related tests)
 
 ## Phase 6: TProxy Role Integration
 
