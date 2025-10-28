@@ -8,6 +8,8 @@ use stratum_apps::{
         channels_sv2::client::extended::ExtendedChannel, mining_sv2::ExtendedExtranonce,
     },
 };
+use async_channel::Sender;
+use ehash_integration::WalletCorrelationData;
 
 /// Defines the operational mode for channel management.
 ///
@@ -52,6 +54,10 @@ pub struct ChannelManagerData {
     /// Per-channel extranonce factories for non-aggregated mode when extranonce adjustment is
     /// needed
     pub extranonce_factories: Option<HashMap<u32, Arc<Mutex<ExtendedExtranonce>>>>,
+    /// Optional sender for eHash wallet correlation events.
+    /// If Some, the ChannelManager will forward SubmitSharesSuccess messages
+    /// to the WalletHandler thread for eHash accounting.
+    pub wallet_sender: Option<Sender<WalletCorrelationData>>,
 }
 
 impl ChannelManagerData {
@@ -59,10 +65,11 @@ impl ChannelManagerData {
     ///
     /// # Arguments
     /// * `mode` - The operational mode (Aggregated or NonAggregated)
+    /// * `wallet_sender` - Optional sender for eHash wallet correlation events
     ///
     /// # Returns
     /// A new ChannelManagerData instance with empty state
-    pub fn new(mode: ChannelMode) -> Self {
+    pub fn new(mode: ChannelMode, wallet_sender: Option<Sender<WalletCorrelationData>>) -> Self {
         Self {
             pending_channels: HashMap::new(),
             extended_channels: HashMap::new(),
@@ -71,6 +78,7 @@ impl ChannelManagerData {
             mode,
             share_sequence_counters: HashMap::new(),
             extranonce_factories: None,
+            wallet_sender,
         }
     }
 

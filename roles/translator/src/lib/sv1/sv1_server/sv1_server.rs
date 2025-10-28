@@ -391,6 +391,7 @@ impl Sv1Server {
             self.sequence_counter.load(Ordering::SeqCst),
             job_version,
             message.version_rolling_mask,
+            message.locking_pubkey,
         )
         .map_err(|_| TproxyError::SV1Error)?;
 

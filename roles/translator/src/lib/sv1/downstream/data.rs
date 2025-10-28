@@ -5,14 +5,14 @@ use std::{
 use stratum_apps::{
     custom_mutex::Mutex,
     stratum_core::{
-        bitcoin::Target,
+        bitcoin::{secp256k1::PublicKey, Target},
         sv1_api::{json_rpc, utils::HexU32Be},
     },
 };
 use tracing::debug;
 
 use super::SubmitShareWithChannelId;
-use crate::sv1::sv1_server::data::Sv1ServerData;
+use crate::{config::TranslatorConfig, sv1::sv1_server::data::Sv1ServerData};
 
 #[derive(Debug)]
 pub struct DownstreamData {
@@ -44,6 +44,10 @@ pub struct DownstreamData {
     pub sv1_server_data: Arc<Mutex<Sv1ServerData>>,
     // Tracks the upstream target for this downstream, used for vardiff target comparison
     pub upstream_target: Option<Target>,
+    /// Locking pubkey for eHash minting (secp256k1 PublicKey)
+    /// Extracted from downstream miner's username during authorization, or set to
+    /// config default. Null pubkey (02 + 32 zeros) indicates no eHash support.
+    pub locking_pubkey: PublicKey,
 }
 
 impl DownstreamData {
@@ -75,6 +79,8 @@ impl DownstreamData {
             pending_share: RefCell::new(None),
             sv1_server_data,
             upstream_target: None,
+            // Initialize with null pubkey - will be set during authorization
+            locking_pubkey: TranslatorConfig::null_locking_pubkey(),
         }
     }
 

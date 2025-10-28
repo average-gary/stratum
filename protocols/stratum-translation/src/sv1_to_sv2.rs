@@ -1,5 +1,5 @@
 use crate::error::{Result, StratumTranslationError};
-use bitcoin::Target;
+use bitcoin::{secp256k1::PublicKey, Target};
 use mining_sv2::{OpenExtendedMiningChannel, SubmitSharesExtended};
 use v1::{client_to_server, utils::HexU32Be};
 
@@ -43,6 +43,9 @@ pub fn build_sv2_open_extended_mining_channel(
 /// * `job_version` - The SV2 job version (from the last job sent to the client).
 /// * `version_rolling_mask` - Optional SV1 version rolling mask, used to compute the SV2 version
 ///   field.
+/// * `locking_pubkey` - Secp256k1 public key for eHash minting.
+///   This should always be provided (either from miner's username or from config default).
+///   Null pubkey (02 + 32 zeros) indicates no eHash support for this share.
 ///
 /// # Returns
 /// * `Ok(SubmitSharesExtended)` if the conversion is successful.
@@ -53,6 +56,7 @@ pub fn build_sv2_submit_shares_extended_from_sv1_submit(
     sequence_number: u32,
     job_version: u32,
     version_rolling_mask: Option<HexU32Be>,
+    locking_pubkey: PublicKey,
 ) -> Result<SubmitSharesExtended<'static>> {
     let version = match (submit.version_bits.clone(), version_rolling_mask) {
         (Some(version_bits), Some(rolling_mask)) => {
@@ -74,6 +78,11 @@ pub fn build_sv2_submit_shares_extended_from_sv1_submit(
         ntime: submit.time.0,
         version,
         extranonce: extranonce
+            .try_into()
+            .map_err(|_| StratumTranslationError::InvalidExtranonceLength)?,
+        // Use provided locking pubkey for eHash minting
+        // TProxy extracts pubkey from downstream miner's username or uses config default
+        locking_pubkey: locking_pubkey.serialize().to_vec()
             .try_into()
             .map_err(|_| StratumTranslationError::InvalidExtranonceLength)?,
     };

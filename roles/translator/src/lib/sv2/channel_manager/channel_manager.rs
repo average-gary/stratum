@@ -65,6 +65,7 @@ impl ChannelManager {
     /// * `sv1_server_sender` - Channel to send messages to SV1 server
     /// * `sv1_server_receiver` - Channel to receive messages from SV1 server
     /// * `mode` - Operating mode (Aggregated or NonAggregated)
+    /// * `wallet_sender` - Optional sender for eHash wallet correlation events
     ///
     /// # Returns
     /// A new ChannelManager instance ready to handle message routing
@@ -74,6 +75,7 @@ impl ChannelManager {
         sv1_server_sender: Sender<Mining<'static>>,
         sv1_server_receiver: Receiver<Mining<'static>>,
         mode: ChannelMode,
+        wallet_sender: Option<async_channel::Sender<ehash_integration::WalletCorrelationData>>,
     ) -> Self {
         let channel_state = ChannelState::new(
             upstream_sender,
@@ -81,7 +83,7 @@ impl ChannelManager {
             sv1_server_sender,
             sv1_server_receiver,
         );
-        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode)));
+        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode, wallet_sender)));
         Self {
             channel_state,
             channel_manager_data,
@@ -674,6 +676,7 @@ mod tests {
             sv1_server_sender,
             sv1_server_receiver,
             mode,
+            None, // No wallet_sender in tests
         )
     }
 
@@ -761,6 +764,8 @@ mod tests {
             ntime: 1234567890,
             version: 0x20000000,
             extranonce: vec![0x01, 0x02, 0x03, 0x04].try_into().unwrap(),
+            // Test with all-zeros locking pubkey (no eHash support)
+            locking_pubkey: vec![0u8; 33].try_into().unwrap(),
         };
 
         // Test that the message can be handled

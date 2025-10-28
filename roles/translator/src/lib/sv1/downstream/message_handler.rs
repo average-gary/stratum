@@ -56,6 +56,39 @@ impl IsServer<'static> for DownstreamData {
     fn handle_authorize(&self, request: &client_to_server::Authorize) -> bool {
         info!("Received mining.authorize from Sv1 downstream");
         debug!("Down: Handling mining.authorize: {:?}", request);
+
+        // TODO: Extract locking_pubkey from request.name (user_identity)
+        // For eHash support, the user_identity should contain an hpub-encoded
+        // secp256k1 public key. Parse the user_identity and store it in
+        // self.locking_pubkey for use in share submissions.
+        //
+        // Expected formats:
+        //   - Direct hpub: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw"
+        //   - HIP-2 format: "username.hpub1..."
+        //   - Or extract from custom format based on pool requirements
+        //
+        // If extraction fails or no pubkey found in username, fall back to
+        // config.default_locking_pubkey (also hpub format). The config validator
+        // ensures default_locking_pubkey is present when ehash_wallet is configured.
+        // If ehash is not configured, locking_pubkey stays as generator point G (sentinel).
+        //
+        // Implementation:
+        //   use ehash_integration::hpub::parse_hpub;
+        //
+        //   // Try to extract hpub from username (e.g., split by '.' and find hpub1 prefix)
+        //   if let Some(hpub_str) = extract_hpub_from_username(&request.name) {
+        //       if let Ok(pubkey) = parse_hpub(hpub_str) {
+        //           self.locking_pubkey = pubkey;
+        //       }
+        //   }
+        //
+        //   // Fall back to config default if extraction failed
+        //   if self.locking_pubkey == TranslatorConfig::null_locking_pubkey() {
+        //       if let Ok(default) = config.decode_default_locking_pubkey() {
+        //           self.locking_pubkey = default;
+        //       }
+        //   }
+
         true
     }
 
@@ -86,6 +119,7 @@ impl IsServer<'static> for DownstreamData {
                 extranonce2_len: self.extranonce2_len,
                 version_rolling_mask: self.version_rolling_mask.clone(),
                 job_version: self.last_job_version_field,
+                locking_pubkey: self.locking_pubkey.clone(), // Clone the 33-byte pubkey
             };
             // Store the share to be sent to the Sv1Server
             self.pending_share.replace(Some(to_send));

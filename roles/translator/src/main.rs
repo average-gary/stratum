@@ -17,6 +17,12 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // Validate eHash configuration before proceeding
+    if let Err(e) = proxy_config.validate_ehash_config() {
+        eprintln!("Translator proxy eHash config validation error: {e}");
+        std::process::exit(1);
+    }
+
     init_logging(proxy_config.log_dir());
 
     TranslatorSv2::new(proxy_config).start().await;

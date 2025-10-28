@@ -105,6 +105,31 @@ impl TranslatorSv2 {
             }
         };
 
+        // Spawn wallet thread if eHash wallet is configured
+        let wallet_sender = if let Some(ref wallet_config) = self.config.ehash_wallet {
+            info!("eHash wallet configured, spawning WalletHandler thread...");
+            match spawn_wallet_thread(
+                task_manager.clone(),
+                wallet_config.clone(),
+                status_sender.clone(),
+            )
+            .await
+            {
+                Ok(sender) => {
+                    info!("WalletHandler thread spawned successfully");
+                    Some(sender)
+                }
+                Err(e) => {
+                    error!("Failed to spawn WalletHandler thread: {}", e);
+                    warn!("Continuing without eHash wallet support");
+                    None
+                }
+            }
+        } else {
+            debug!("No eHash wallet configured, skipping WalletHandler");
+            None
+        };
+
         let channel_manager = Arc::new(ChannelManager::new(
             channel_manager_to_upstream_sender,
             upstream_to_channel_manager_receiver,
@@ -115,6 +140,7 @@ impl TranslatorSv2 {
             } else {
                 ChannelMode::NonAggregated
             },
+            wallet_sender,
         ));
 
         let downstream_addr = SocketAddr::new(
@@ -252,4 +278,61 @@ impl TranslatorSv2 {
         task_manager.join_all().await;
         info!("TranslatorSv2 shutdown complete.");
     }
+}
+
+/// Spawns a WalletHandler thread for eHash accounting and correlation tracking.
+///
+/// This function creates a WalletHandler instance, spawns its run loop in a dedicated
+/// thread via the task manager, and returns the sender channel for submitting
+/// WalletCorrelationData events.
+///
+/// # Arguments
+/// * `task_manager` - Shared task manager for spawning and tracking async tasks
+/// * `config` - Wallet configuration including optional mint URL and fault tolerance settings
+/// * `status_tx` - Channel for sending status updates (reserved for future use)
+///
+/// # Returns
+/// A cloneable `Sender<WalletCorrelationData>` for submitting correlation events from
+/// SubmitSharesSuccess messages to the wallet thread.
+///
+/// # Errors
+/// Returns `WalletError` if WalletHandler initialization fails.
+///
+/// # Example
+/// ```ignore
+/// // Example usage (requires proper async context and initialized variables)
+/// let wallet_sender = spawn_wallet_thread(
+///     task_manager.clone(),
+///     wallet_config,
+///     status_sender.clone(),
+/// ).await?;
+/// ```
+pub async fn spawn_wallet_thread(
+    task_manager: Arc<TaskManager>,
+    config: ehash_integration::WalletConfig,
+    _status_tx: async_channel::Sender<Status>,
+) -> Result<async_channel::Sender<ehash_integration::WalletCorrelationData>, ehash_integration::WalletError> {
+    use ehash_integration::WalletHandler;
+
+    // Create WalletHandler instance
+    let mut wallet_handler = WalletHandler::new(config).await?;
+
+    // Get cloneable sender before moving handler into task
+    let wallet_sender = wallet_handler.get_sender();
+
+    // Spawn wallet thread using task manager
+    task_manager.spawn(async move {
+        info!("WalletHandler thread starting...");
+        match wallet_handler.run().await {
+            Ok(()) => {
+                info!("WalletHandler thread exited gracefully.");
+            }
+            Err(e) => {
+                error!("WalletHandler thread exited with error: {}", e);
+            }
+        }
+    });
+
+    info!("WalletHandler thread spawned successfully.");
+    Ok(wallet_sender)
 }

@@ -324,34 +324,42 @@ This document breaks down the eHash persistence implementation into small, focus
 ## Phase 6: TProxy Role Integration
 
 ### 6.1 Add WalletConfig to TProxy TOML config
-- [ ] Extend TProxy configuration structs to include TProxyShareConfig
-- [ ] Add locking_pubkey, user_identity, mint_url fields
-- [ ] Add deserialization support
+- [x] Extend TProxy configuration structs to include WalletConfig
+- [x] Add ehash_wallet and default_locking_pubkey fields (hpub format)
+- [x] Add deserialization support
+- [x] Add validation requiring default_locking_pubkey when ehash_wallet configured
+- [x] Create example config file with eHash support
 - **Requirements**: 5.2, 5.5
-- **Files**: `roles/translator/src/lib.rs`, example config files
+- **Files**: `roles/translator/src/lib/config.rs`, `config-examples/tproxy-config-local-pool-with-ehash-example.toml`
+- **Implementation Note**: Used hpub format (bech32-encoded) for pubkeys instead of hex
 
 ### 6.2 Add wallet thread spawning function
-- [ ] Create `spawn_wallet_thread(task_manager, config, status_tx)` helper
-- [ ] Instantiate WalletHandler
-- [ ] Spawn thread using task_manager
-- [ ] Return sender channel
+- [x] Create `spawn_wallet_thread(task_manager, config, status_tx)` helper
+- [x] Instantiate WalletHandler
+- [x] Spawn thread using task_manager
+- [x] Return sender channel
 - **Requirements**: 7.6
-- **Files**: `roles/translator/src/lib.rs`
+- **Files**: `roles/translator/src/lib/mod.rs:283-311`
 
 ### 6.3 Integrate wallet_sender into TProxy initialization
-- [ ] Modify TProxy initialization to call spawn_wallet_thread if configured
-- [ ] Store wallet_sender in TProxy context
-- [ ] Extract locking_pubkey for connection setup
+- [x] Modify TProxy initialization to call spawn_wallet_thread if configured
+- [x] Store wallet_sender in ChannelManagerData
+- [x] Add wallet_sender parameter to ChannelManager::new()
+- [x] Spawn wallet thread at startup when ehash_wallet configured
 - **Requirements**: 5.2
-- **Files**: `roles/translator/src/lib.rs`
+- **Files**: `roles/translator/src/lib/mod.rs:108-144`, `roles/translator/src/lib/sv2/channel_manager/data.rs`, `roles/translator/src/lib/sv2/channel_manager/channel_manager.rs`
 
 ### 6.4 Hook SubmitSharesSuccess message handling
-- [ ] Extract channel_id, sequence_number, user_identity
-- [ ] Extract ehash_tokens_minted from TLV (default 0 if not present)
-- [ ] Create WalletCorrelationData
-- [ ] Send via wallet_sender.try_send() (non-blocking)
+- [x] Add hook point in handle_submit_shares_success
+- [x] Check for wallet_sender configuration
+- [x] Add TODO comments for full correlation tracking implementation
+- [x] Infrastructure ready for extracting ehash_tokens_minted from TLV
+- [ ] TODO: Implement sequence_number -> downstream_id tracking for correlation
+- [ ] TODO: Extract ehash_tokens_minted from TLV (default 0 if not present)
+- [ ] TODO: Create and send WalletCorrelationData
 - **Requirements**: 3.4, 8.2
-- **Files**: TProxy message handler for SubmitSharesSuccess
+- **Files**: `roles/translator/src/lib/sv2/channel_manager/message_handler.rs:289-342`
+- **Implementation Note**: Hook infrastructure in place, needs downstream correlation tracking
 
 ### 6.5 Add TProxy integration tests
 - [ ] Test wallet thread spawning and initialization
@@ -359,6 +367,17 @@ This document breaks down the eHash persistence implementation into small, focus
 - [ ] Test translation continues during wallet failures
 - **Requirements**: 6.2
 - **Files**: TProxy integration tests
+
+### 6.6 Implement hpub extraction from miner username
+- [ ] Create `extract_hpub_from_username()` helper function
+- [ ] Parse miner username in `handle_authorize()` to extract hpub
+- [ ] Support multiple formats: direct hpub, HIP-2 format (username.hpub1...), custom formats
+- [ ] Use `ehash_integration::hpub::parse_hpub()` to validate and decode
+- [ ] Fall back to `config.decode_default_locking_pubkey()` if extraction fails
+- [ ] Store extracted pubkey in `DownstreamData.locking_pubkey` for share submissions
+- **Requirements**: 2.5, 5.2
+- **Files**: `roles/translator/src/lib/sv1/downstream/message_handler.rs` (handle_authorize function)
+- **Implementation Note**: Enables per-miner eHash accounting where each downstream miner can have their own locking pubkey for receiving eHash tokens
 
 ## Phase 7: JDC Role Integration
 

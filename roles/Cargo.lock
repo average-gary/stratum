@@ -5265,6 +5265,8 @@ dependencies = [
  "async-channel 1.9.0",
  "clap",
  "config",
+ "ehash-integration",
+ "hex",
  "serde",
  "serde_json",
  "sha2 0.10.9",

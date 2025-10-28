@@ -3,7 +3,9 @@ pub(super) mod data;
 pub mod downstream;
 mod message_handler;
 
-use stratum_apps::stratum_core::sv1_api::{client_to_server::Submit, utils::HexU32Be};
+use stratum_apps::stratum_core::{
+    bitcoin::secp256k1::PublicKey, sv1_api::{client_to_server::Submit, utils::HexU32Be}
+};
 
 /// Messages sent from downstream handling logic to the SV1 server.
 ///
@@ -40,4 +42,8 @@ pub struct SubmitShareWithChannelId {
     pub version_rolling_mask: Option<HexU32Be>,
     /// The version field from the job, used for validation
     pub job_version: Option<u32>,
+    /// Locking pubkey for eHash minting (secp256k1 PublicKey)
+    /// Extracted from downstream miner's username or config default.
+    /// Null pubkey (02 + 32 zeros) indicates no eHash support for this share.
+    pub locking_pubkey: PublicKey,
 }

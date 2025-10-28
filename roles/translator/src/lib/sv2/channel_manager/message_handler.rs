@@ -292,6 +292,52 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         m: SubmitSharesSuccess,
     ) -> Result<(), Self::Error> {
         info!("Received: {} ✅", m);
+
+        // TODO: Full per-downstream correlation requires tracking sequence_number -> downstream_id
+        // For now, we log that wallet correlation would happen here.
+        // Implementation notes:
+        // 1. Need to track sequence_number -> (downstream_id, locking_pubkey) when shares are forwarded
+        // 2. Look up that mapping here to get the correct downstream miner's data
+        // 3. Extract ehash_tokens_minted from TLV field (default 0 if not present)
+        // 4. Create WalletCorrelationData with:
+        //    - channel_id: m.channel_id
+        //    - sequence_number: m.last_sequence_number
+        //    - user_identity: from channel data or downstream mapping
+        //    - timestamp: SystemTime::now()
+        //    - ehash_tokens_minted: extracted from TLV or 0
+        //    - locking_pubkey: from downstream mapping
+        // 5. Send via wallet_sender.try_send() if wallet_sender is Some
+
+        // Check if wallet_sender is configured
+        let wallet_sender_opt = self
+            .channel_manager_data
+            .super_safe_lock(|data| data.wallet_sender.clone());
+
+        if let Some(wallet_sender) = wallet_sender_opt {
+            // Placeholder implementation - needs proper downstream correlation tracking
+            debug!(
+                "Would send wallet correlation for channel_id={}, last_sequence_number={}",
+                m.channel_id, m.last_sequence_number
+            );
+            debug!("Full per-downstream correlation tracking not yet implemented");
+
+            // TODO: Uncomment and implement once downstream correlation tracking is added
+            // let correlation_data = WalletCorrelationData {
+            //     channel_id: m.channel_id,
+            //     sequence_number: m.last_sequence_number,
+            //     user_identity: /* lookup from tracking */,
+            //     timestamp: SystemTime::now(),
+            //     ehash_tokens_minted: /* extract from TLV or default 0 */,
+            //     locking_pubkey: /* lookup from tracking */,
+            // };
+            //
+            // if let Err(e) = wallet_sender.try_send(correlation_data) {
+            //     warn!("Failed to send wallet correlation data: {}", e);
+            // }
+
+            let _ = wallet_sender; // Suppress unused variable warning
+        }
+
         Ok(())
     }
 
