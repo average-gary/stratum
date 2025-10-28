@@ -55,6 +55,12 @@ pub struct MintConfig {
 
     /// Optional log level for mint operations
     pub log_level: Option<String>,
+
+    /// Placeholder locking pubkey for Phase 5 (basic integration)
+    /// This will be replaced with per-share pubkeys from TLV in Phase 8
+    /// Format: hex-encoded 33-byte compressed secp256k1 public key
+    /// TODO: Remove in Phase 8 when TLV 0x0004 extraction is implemented
+    pub placeholder_locking_pubkey: Option<String>,
 }
 
 /// Configuration for the Wallet handler

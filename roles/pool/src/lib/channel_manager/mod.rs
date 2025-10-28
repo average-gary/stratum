@@ -6,6 +6,8 @@ use std::{
 
 use async_channel::{Receiver, Sender};
 use core::sync::atomic::Ordering;
+use ehash_integration::types::EHashMintData;
+use stratum_apps::stratum_core::bitcoin;
 use stratum_apps::{
     config_helpers::CoinbaseRewardScript,
     custom_mutex::Mutex,
@@ -91,6 +93,9 @@ pub struct ChannelManager {
     share_batch_size: usize,
     shares_per_minute: f32,
     coinbase_reward_script: CoinbaseRewardScript,
+    /// Sender channel for eHash mint events
+    /// Validated shares generate EHashMintData events sent to the mint thread
+    mint_sender: Sender<EHashMintData>,
 }
 
 impl ChannelManager {
@@ -103,6 +108,7 @@ impl ChannelManager {
         downstream_sender: broadcast::Sender<(usize, Mining<'static>)>,
         downstream_receiver: Receiver<(usize, Mining<'static>)>,
         coinbase_outputs: Vec<u8>,
+        mint_sender: Sender<EHashMintData>,
     ) -> PoolResult<Self> {
         let range_0 = 0..0;
         let range_1 = 0..POOL_ALLOCATION_BYTES;
@@ -151,6 +157,7 @@ impl ChannelManager {
             shares_per_minute: config.shares_per_minute(),
             pool_tag_string: config.pool_signature().to_string(),
             coinbase_reward_script: config.coinbase_reward_script().clone(),
+            mint_sender,
         };
 
         Ok(channel_manager)
@@ -522,6 +529,22 @@ impl ChannelManager {
 
         info!("Vardiff update cycle complete");
         Ok(())
+    }
+
+    /// Gets a placeholder locking pubkey for Phase 5 (basic integration)
+    ///
+    /// This is a temporary implementation until Phase 8 when TLV 0x0004 extraction
+    /// will provide per-share pubkeys from downstream miners.
+    ///
+    /// TODO: Remove this in Phase 8 and extract pubkey from TLV field 0x0004
+    pub fn get_placeholder_locking_pubkey() -> bitcoin::secp256k1::PublicKey {
+        // Using a fixed public key for Phase 5
+        // This will be replaced with TLV-extracted pubkeys in Phase 8
+        use bitcoin::secp256k1::{PublicKey, Secp256k1};
+        let secp = Secp256k1::new();
+        let secret_key = bitcoin::secp256k1::SecretKey::from_slice(&[0x01; 32])
+            .expect("32 bytes, within curve order");
+        PublicKey::from_secret_key(&secp, &secret_key)
     }
 }
 

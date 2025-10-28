@@ -688,6 +688,26 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                 match res {
                     Ok(ShareValidationResult::Valid(share_hash)) => {
+                        // Send eHash mint event
+                        use stratum_apps::stratum_core::bitcoin::hashes::Hash as HashTrait;
+                        let mint_data = ehash_integration::types::EHashMintData {
+                            share_hash: stratum_apps::stratum_core::bitcoin::hashes::sha256d::Hash::from_slice(share_hash.as_byte_array())
+                                .expect("32-byte hash"),
+                            block_found: false,
+                            channel_id,
+                            user_identity: extended_channel.get_user_identity().clone(),
+                            target: *extended_channel.get_target(),
+                            sequence_number: msg.sequence_number,
+                            timestamp: std::time::SystemTime::now(),
+                            template_id: None,
+                            coinbase: None,
+                            locking_pubkey: super::ChannelManager::get_placeholder_locking_pubkey(),
+                        };
+
+                        if let Err(e) = self.mint_sender.try_send(mint_data) {
+                            tracing::warn!("Failed to send eHash mint data: {}", e);
+                        }
+
                         let share_accounting = extended_channel.get_share_accounting();
                         if share_accounting.should_acknowledge() {
                             let success = SubmitSharesSuccess {
@@ -708,6 +728,27 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     }
                     Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
                         info!("SubmitSharesExtended: 💰 Block Found!!! 💰{share_hash}");
+
+                        // Send eHash mint event for block found
+                        use stratum_apps::stratum_core::bitcoin::hashes::Hash as HashTrait;
+                        let mint_data = ehash_integration::types::EHashMintData {
+                            share_hash: stratum_apps::stratum_core::bitcoin::hashes::sha256d::Hash::from_slice(share_hash.as_byte_array())
+                                .expect("32-byte hash"),
+                            block_found: true,
+                            channel_id,
+                            user_identity: extended_channel.get_user_identity().clone(),
+                            target: *extended_channel.get_target(),
+                            sequence_number: msg.sequence_number,
+                            timestamp: std::time::SystemTime::now(),
+                            template_id,
+                            coinbase: Some(coinbase.clone()),
+                            locking_pubkey: super::ChannelManager::get_placeholder_locking_pubkey(),
+                        };
+
+                        if let Err(e) = self.mint_sender.try_send(mint_data) {
+                            tracing::warn!("Failed to send eHash mint data for block found: {}", e);
+                        }
+
                         // if we have a template id (i.e.: this was not a custom job)
                         // we can propagate the solution to the TP
                         if let Some(template_id) = template_id {

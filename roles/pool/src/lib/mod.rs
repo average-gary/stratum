@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_channel::unbounded;
+use ehash_integration::{config::MintConfig, mint::MintHandler, types::EHashMintData};
 use stratum_apps::stratum_core::{
     bitcoin::consensus::Encodable, parsers_sv2::TemplateDistribution,
 };
@@ -68,6 +69,22 @@ impl PoolSv2 {
 
         debug!("Channels initialized.");
 
+        // Spawn mint thread - eHash configuration is required for this daemon
+        let mint_config = self.config.ehash_mint().ok_or_else(|| {
+            crate::error::PoolError::Custom(
+                "eHash mint configuration is required. Add [ehash_mint] section to your pool config.".to_string()
+            )
+        })?;
+
+        info!("Spawning eHash mint thread...");
+        let mint_sender = spawn_mint_thread(
+            task_manager.clone(),
+            mint_config.clone(),
+            notify_shutdown.subscribe(),
+        )
+        .await?;
+        info!("eHash mint thread spawned successfully");
+
         let channel_manager = ChannelManager::new(
             self.config.clone(),
             channel_manager_to_tp_sender,
@@ -75,6 +92,7 @@ impl PoolSv2 {
             channel_manager_to_downstream_sender.clone(),
             downstream_to_channel_manager_receiver,
             encoded_outputs.clone(),
+            mint_sender,
         )
         .await?;
 
@@ -160,10 +178,27 @@ impl PoolSv2 {
             }
         }
 
-        warn!("Graceful shutdown");
-        task_manager.abort_all().await;
-        info!("Joining remaining tasks...");
-        task_manager.join_all().await;
+        warn!("Graceful shutdown initiated");
+
+        // Wait for tasks to complete gracefully with a timeout
+        info!("Waiting for tasks to complete gracefully...");
+        let graceful_shutdown = tokio::time::timeout(
+            tokio::time::Duration::from_secs(10),
+            task_manager.join_all()
+        );
+
+        match graceful_shutdown.await {
+            Ok(_) => {
+                info!("All tasks completed gracefully");
+            }
+            Err(_) => {
+                warn!("Graceful shutdown timeout exceeded, aborting remaining tasks...");
+                task_manager.abort_all().await;
+                info!("Joining aborted tasks...");
+                task_manager.join_all().await;
+            }
+        }
+
         info!("Pool shutdown complete.");
         Ok(())
     }
@@ -174,4 +209,52 @@ impl Drop for PoolSv2 {
         info!("PoolSv2 dropped");
         let _ = self.notify_shutdown.send(ShutdownMessage::ShutdownAll);
     }
+}
+
+/// Spawns a mint thread for eHash token minting
+///
+/// Creates a MintHandler instance and spawns it as a dedicated async task managed by
+/// the TaskManager. The mint thread runs independently of mining operations and
+/// processes EHashMintData events sent via the returned async channel.
+///
+/// # Arguments
+/// * `task_manager` - TaskManager to register the mint thread with
+/// * `config` - MintConfig containing mint settings
+/// * `shutdown_rx` - Shutdown signal receiver for graceful shutdown
+///
+/// # Returns
+/// Returns the sender channel for EHashMintData events on success
+pub async fn spawn_mint_thread(
+    task_manager: Arc<TaskManager>,
+    config: MintConfig,
+    mut shutdown_rx: broadcast::Receiver<ShutdownMessage>,
+) -> PoolResult<async_channel::Sender<EHashMintData>> {
+    info!("Initializing eHash mint handler...");
+
+    let mut mint_handler = MintHandler::new(config).await.map_err(|e| {
+        crate::error::PoolError::Custom(format!("Failed to initialize mint handler: {}", e))
+    })?;
+
+    let sender = mint_handler.get_sender();
+
+    // Create an async_channel for shutdown signal conversion
+    let (shutdown_tx, shutdown_rx_async) = async_channel::bounded::<()>(1);
+
+    // Spawn a task to convert broadcast shutdown to async_channel
+    task_manager.spawn(async move {
+        if shutdown_rx.recv().await.is_ok() {
+            let _ = shutdown_tx.send(()).await;
+        }
+    });
+
+    info!("Spawning mint handler task...");
+    task_manager.spawn(async move {
+        if let Err(e) = mint_handler.run_with_shutdown(shutdown_rx_async).await {
+            warn!("Mint handler error: {}", e);
+        }
+        info!("Mint handler task completed");
+    });
+
+    info!("eHash mint handler initialized successfully");
+    Ok(sender)
 }

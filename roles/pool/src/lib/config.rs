@@ -19,6 +19,8 @@ use stratum_apps::{
     stratum_core::bitcoin::{Amount, TxOut},
 };
 
+use ehash_integration::config::MintConfig;
+
 /// Configuration for the Pool, including connection, authority, and coinbase settings.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct PoolConfig {
@@ -34,6 +36,9 @@ pub struct PoolConfig {
     share_batch_size: usize,
     log_file: Option<PathBuf>,
     server_id: u16,
+    /// Optional eHash mint configuration
+    /// When provided, the Pool will mint eHash tokens for validated shares
+    ehash_mint: Option<MintConfig>,
 }
 
 impl PoolConfig {
@@ -64,6 +69,7 @@ impl PoolConfig {
             share_batch_size,
             log_file: None,
             server_id,
+            ehash_mint: None,
         }
     }
 
@@ -148,6 +154,11 @@ impl PoolConfig {
             value: Amount::from_sat(0),
             script_pubkey: self.coinbase_reward_script.script_pubkey().to_owned(),
         }
+    }
+
+    /// Returns the optional eHash mint configuration.
+    pub fn ehash_mint(&self) -> Option<&MintConfig> {
+        self.ehash_mint.as_ref()
     }
 }
 

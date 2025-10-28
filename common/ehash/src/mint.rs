@@ -553,19 +553,50 @@ impl MintHandler {
     /// Gracefully shutdown the mint handler, completing pending operations
     ///
     /// This ensures:
-    /// - All pending mint operations are completed
-    /// - CDK Mint instance is properly closed
-    /// - Database connections are cleaned up
+    /// - Receiver channel is closed to prevent new events
+    /// - All pending mint operations in the receiver queue are processed
+    /// - All events in the retry queue are processed
+    /// - CDK Mint instance is cleaned up (via Arc Drop)
+    /// - Database connections are closed (via CDK cleanup)
+    ///
+    /// The shutdown process attempts to process all pending operations
+    /// but logs warnings if any fail. This provides best-effort delivery
+    /// while ensuring the handler always shuts down cleanly.
     pub async fn shutdown(&mut self) -> Result<(), MintError> {
         tracing::info!("Shutting down MintHandler...");
+
         // Close the receiver to prevent new events
         self.receiver.close();
 
-        // TODO: Process any remaining events in the queue
-        // TODO: Close CDK Mint instance properly
-        // TODO: Cleanup database connections
+        // Process any remaining events in the receiver channel
+        let mut processed_count = 0;
+        while let Ok(data) = self.receiver.try_recv() {
+            tracing::debug!("Processing pending mint event during shutdown...");
+            if let Err(e) = self.process_mint_data(data).await {
+                tracing::warn!("Failed to process pending mint event during shutdown: {}", e);
+            } else {
+                processed_count += 1;
+            }
+        }
 
-        tracing::info!("MintHandler shutdown complete");
+        if processed_count > 0 {
+            tracing::info!("Processed {} pending mint events during shutdown", processed_count);
+        }
+
+        // Process retry queue
+        let retry_count = self.retry_queue.len();
+        if retry_count > 0 {
+            tracing::info!("Processing {} events from retry queue during shutdown...", retry_count);
+            while let Some(data) = self.retry_queue.pop_front() {
+                if let Err(e) = self.process_mint_data(data).await {
+                    tracing::warn!("Failed to process retry queue event during shutdown: {}", e);
+                }
+            }
+        }
+
+        // CDK Mint instance is Arc<Mint> and will be cleaned up when all references are dropped
+        // The database connections will be closed when the Mint instance is dropped
+        tracing::info!("MintHandler shutdown complete (processed {} events, {} retries)", processed_count, retry_count);
         Ok(())
     }
 
