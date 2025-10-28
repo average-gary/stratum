@@ -621,7 +621,6 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -974,6 +973,7 @@ name = "ehash-integration"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "bech32",
  "bitcoin",
  "cdk",
  "cdk-common",

@@ -37,6 +37,9 @@ thiserror = "1"
 # UUID generation for quote IDs (NUT-04 compliance)
 uuid = { version = "1.0", features = ["v4"] }
 
+# Bech32 encoding for hpub format
+bech32 = "0.11"
+
 [dev-dependencies]
 toml = "0.8"
 

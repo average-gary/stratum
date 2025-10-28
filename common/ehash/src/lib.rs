@@ -47,6 +47,7 @@ pub mod types; // Phase 2: Core Data Structures
 pub mod config; // Phase 2: Core Data Structures
 pub mod error; // Phase 2: Core Data Structures
 pub mod mint; // Phase 3: MintHandler Implementation
+pub mod hpub; // Phase 3: hpub encoding/decoding utilities
               // pub mod wallet;    // Phase 4: WalletHandler Implementation
 
 // Re-export commonly used types
@@ -54,3 +55,4 @@ pub use types::{EHashMintData, WalletCorrelationData};
 pub use config::{MintConfig, WalletConfig, JdcEHashConfig, JdcEHashMode};
 pub use error::{MintError, WalletError};
 pub use mint::MintHandler;
+pub use hpub::{encode_hpub, parse_hpub};

@@ -130,25 +130,25 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.8 Add fault tolerance - exponential backoff
-- [ ] Add backoff_multiplier and max_retries config
-- [ ] Implement `attempt_recovery()` method
-- [ ] Calculate exponential backoff duration
+- [x] Add backoff_multiplier and max_retries config
+- [x] Implement `attempt_recovery()` method
+- [x] Calculate exponential backoff duration
 - **Requirements**: 6.1, 6.5
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.9 Add graceful shutdown support
-- [ ] Implement `run_with_shutdown(shutdown_rx)` method
-- [ ] Add tokio::select! for shutdown signal handling
-- [ ] Implement `shutdown()` to complete pending operations
+- [x] Implement `run_with_shutdown(shutdown_rx)` method
+- [x] Add tokio::select! for shutdown signal handling
+- [x] Implement `shutdown()` to complete pending operations
 - **Requirements**: 6.1, 6.5
 - **Files**: `common/ehash/src/mint.rs`
 
 ### 3.10 Add hpub utility functions
-- [ ] Create `common/ehash/src/hpub.rs` with hpub encoding/decoding functions
-- [ ] Implement `parse_hpub(hpub: &str) -> Result<PublicKey, Error>` with bech32 validation
-- [ ] Implement `encode_hpub(pubkey: &PublicKey) -> String` for configuration
-- [ ] Add validation for 'hpub' HRP and 33-byte pubkey length
-- [ ] Add unit tests for hpub encoding/decoding
+- [x] Create `common/ehash/src/hpub.rs` with hpub encoding/decoding functions
+- [x] Implement `parse_hpub(hpub: &str) -> Result<PublicKey, Error>` with bech32 validation
+- [x] Implement `encode_hpub(pubkey: &PublicKey) -> String` for configuration
+- [x] Add validation for 'hpub' HRP and 33-byte pubkey length
+- [x] Add unit tests for hpub encoding/decoding
 - **Requirements**: 2.1, 2.2, 2.3
 - **Files**: `common/ehash/src/hpub.rs`
 
