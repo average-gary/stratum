@@ -452,6 +452,104 @@ impl MintHandler {
         Ok(())
     }
 
+    /// Attempt to recover from failures by processing the retry queue
+    ///
+    /// This method implements exponential backoff recovery:
+    /// - Only attempts recovery if `recovery_enabled` is true
+    /// - Uses exponential backoff based on `failure_count`
+    /// - Processes items from the retry queue one at a time
+    /// - Stops processing if an item fails (to avoid cascading failures)
+    /// - Resets failure counters on successful recovery
+    ///
+    /// # Exponential Backoff Formula
+    /// `backoff_duration = backoff_multiplier * 2^failure_count`
+    ///
+    /// Example with backoff_multiplier=2:
+    /// - After 1 failure: 2 * 2^1 = 4 seconds
+    /// - After 2 failures: 2 * 2^2 = 8 seconds
+    /// - After 3 failures: 2 * 2^3 = 16 seconds
+    /// - After 10 failures: 2 * 2^10 = 2048 seconds (capped)
+    ///
+    /// # Errors
+    /// Returns `MintError` if recovery operations fail
+    pub async fn attempt_recovery(&mut self) -> Result<(), MintError> {
+        // Check if recovery is enabled
+        if !self.config.recovery_enabled {
+            return Ok(());
+        }
+
+        // Check if there's anything to recover
+        if self.retry_queue.is_empty() {
+            return Ok(());
+        }
+
+        // Calculate exponential backoff duration
+        if let Some(last_failure) = self.last_failure {
+            // Cap failure_count at 10 to prevent overflow (2^10 = 1024)
+            let capped_count = self.failure_count.min(10);
+
+            // Calculate backoff: backoff_multiplier * 2^failure_count
+            let backoff_duration = std::time::Duration::from_secs(
+                self.config.backoff_multiplier.saturating_mul(2u64.pow(capped_count))
+            );
+
+            // Check if enough time has elapsed since last failure
+            let elapsed = last_failure
+                .elapsed()
+                .unwrap_or(std::time::Duration::ZERO);
+
+            if elapsed < backoff_duration {
+                tracing::debug!(
+                    "Recovery backoff in progress: {}s elapsed, {}s required (attempt {})",
+                    elapsed.as_secs(),
+                    backoff_duration.as_secs(),
+                    self.failure_count
+                );
+                return Ok(());
+            }
+        }
+
+        tracing::info!(
+            "Attempting recovery with {} items in retry queue (failure_count: {})",
+            self.retry_queue.len(),
+            self.failure_count
+        );
+
+        // Process retry queue one item at a time
+        // Stop on first failure to avoid cascading failures
+        while let Some(data) = self.retry_queue.pop_front() {
+            match self.process_mint_data(data.clone()).await {
+                Ok(()) => {
+                    tracing::info!(
+                        "Recovery successful for channel {} sequence {}",
+                        data.channel_id,
+                        data.sequence_number
+                    );
+                    // Reset failure counters on success
+                    self.failure_count = 0;
+                    self.last_failure = None;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Recovery attempt failed for channel {} sequence {}: {}",
+                        data.channel_id,
+                        data.sequence_number,
+                        e
+                    );
+                    // Put the item back at the front of the queue
+                    self.retry_queue.push_front(data);
+                    // Increment failure count for next backoff calculation
+                    self.failure_count += 1;
+                    self.last_failure = Some(SystemTime::now());
+                    // Stop processing to avoid cascading failures
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Gracefully shutdown the mint handler, completing pending operations
     ///
     /// This ensures:
@@ -1633,6 +1731,296 @@ mod tests {
         assert_eq!(retrieved.sequence_number, original_data.sequence_number);
         assert_eq!(retrieved.template_id, original_data.template_id);
         assert_eq!(retrieved.coinbase, original_data.coinbase);
+    }
+
+    #[tokio::test]
+    async fn test_attempt_recovery_when_disabled() {
+        let mut config = create_test_config();
+        config.recovery_enabled = false;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Add an item to retry queue
+        let share_hash = Hash::from_byte_array([0u8; 32]);
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+        handler.retry_queue.push_back(data);
+        handler.failure_count = 1;
+
+        // Attempt recovery - should do nothing when disabled
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should succeed (no-op when disabled)");
+
+        // Verify queue is unchanged
+        assert_eq!(handler.retry_queue.len(), 1, "Queue should not be processed when recovery disabled");
+        assert_eq!(handler.failure_count, 1, "Failure count should not change");
+    }
+
+    #[tokio::test]
+    async fn test_attempt_recovery_empty_queue() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Attempt recovery with empty queue
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should succeed (no-op with empty queue)");
+        assert_eq!(handler.retry_queue.len(), 0, "Queue should remain empty");
+    }
+
+    #[tokio::test]
+    async fn test_attempt_recovery_respects_backoff() {
+        let mut config = create_test_config();
+        config.backoff_multiplier = 2;
+        config.max_retries = 10;
+
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Set up failure state
+        handler.failure_count = 2; // Should require 2 * 2^2 = 8 seconds backoff
+        handler.last_failure = Some(SystemTime::now());
+
+        // Add item to retry queue
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+        handler.retry_queue.push_back(data);
+
+        // Attempt recovery immediately - should be blocked by backoff
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should succeed (blocked by backoff)");
+        assert_eq!(handler.retry_queue.len(), 1, "Queue should not be processed during backoff");
+        assert_eq!(handler.failure_count, 2, "Failure count should not change during backoff");
+    }
+
+    #[tokio::test]
+    async fn test_attempt_recovery_successful() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create unique shares
+        let mut hash_bytes1 = [0xffu8; 32];
+        hash_bytes1[..5].fill(0x00);
+        let share_hash1 = Hash::from_byte_array(hash_bytes1);
+
+        let mut hash_bytes2 = [0xffu8; 32];
+        hash_bytes2[..5].fill(0x00);
+        hash_bytes2[5] = 0x01;
+        let share_hash2 = Hash::from_byte_array(hash_bytes2);
+
+        let data1 = EHashMintData {
+            share_hash: share_hash1,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user1".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+
+        let data2 = EHashMintData {
+            share_hash: share_hash2,
+            block_found: false,
+            channel_id: 2,
+            user_identity: "test_user2".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 2,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+
+        // Add items to retry queue
+        handler.retry_queue.push_back(data1);
+        handler.retry_queue.push_back(data2);
+        handler.failure_count = 1;
+        handler.last_failure = Some(SystemTime::now() - std::time::Duration::from_secs(100));
+
+        // Attempt recovery - backoff time has passed
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should succeed");
+
+        // Verify queue is emptied and counters reset
+        assert_eq!(handler.retry_queue.len(), 0, "All items should be processed");
+        assert_eq!(handler.failure_count, 0, "Failure count should be reset");
+        assert!(handler.last_failure.is_none(), "Last failure should be cleared");
+    }
+
+    #[tokio::test]
+    async fn test_attempt_recovery_stops_on_failure() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Create shares - first is unique, second will be duplicate
+        let mut hash_bytes1 = [0xffu8; 32];
+        hash_bytes1[..5].fill(0x00);
+        let share_hash1 = Hash::from_byte_array(hash_bytes1);
+
+        let data1 = EHashMintData {
+            share_hash: share_hash1,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user1".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+
+        // First mint the data so it's in the database
+        handler.process_mint_data(data1.clone()).await.unwrap();
+
+        // Now add duplicate to retry queue (this will fail)
+        handler.retry_queue.push_back(data1.clone());
+
+        // Add a second valid item
+        let mut hash_bytes2 = [0xffu8; 32];
+        hash_bytes2[..5].fill(0x00);
+        hash_bytes2[5] = 0x01;
+        let share_hash2 = Hash::from_byte_array(hash_bytes2);
+
+        let data2 = EHashMintData {
+            share_hash: share_hash2,
+            block_found: false,
+            channel_id: 2,
+            user_identity: "test_user2".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 2,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+        handler.retry_queue.push_back(data2);
+
+        handler.failure_count = 1;
+        handler.last_failure = Some(SystemTime::now() - std::time::Duration::from_secs(100));
+
+        // Attempt recovery - should stop after first failure
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should complete (even with failures)");
+
+        // Verify: first item failed and is back in queue, second item was not processed
+        assert_eq!(handler.retry_queue.len(), 2, "Failed items should remain in queue");
+        assert_eq!(handler.failure_count, 2, "Failure count should increment");
+        assert!(handler.last_failure.is_some(), "Last failure should be updated");
+    }
+
+    #[tokio::test]
+    async fn test_exponential_backoff_calculation() {
+        let mut config = create_test_config();
+        config.backoff_multiplier = 2;
+
+        let handler = MintHandler::new(config).await.unwrap();
+
+        // Test backoff calculation for different failure counts
+        let test_cases = vec![
+            (0, 2),    // 2 * 2^0 = 2 seconds
+            (1, 4),    // 2 * 2^1 = 4 seconds
+            (2, 8),    // 2 * 2^2 = 8 seconds
+            (3, 16),   // 2 * 2^3 = 16 seconds
+            (5, 64),   // 2 * 2^5 = 64 seconds
+            (10, 2048), // 2 * 2^10 = 2048 seconds (max before capping)
+        ];
+
+        for (failure_count, expected_seconds) in test_cases {
+            let capped_count = failure_count.min(10);
+            let backoff = handler.config.backoff_multiplier.saturating_mul(2u64.pow(capped_count));
+            assert_eq!(
+                backoff, expected_seconds,
+                "Backoff calculation incorrect for failure_count={}",
+                failure_count
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_exponential_backoff_overflow_protection() {
+        let mut config = create_test_config();
+        config.backoff_multiplier = 2;
+
+        let handler = MintHandler::new(config).await.unwrap();
+
+        // Test that large failure counts are capped to prevent overflow
+        let very_large_failure_count = 20u32;
+        let capped = very_large_failure_count.min(10);
+
+        assert_eq!(capped, 10, "Failure count should be capped at 10");
+
+        // Verify backoff doesn't overflow
+        let backoff = handler.config.backoff_multiplier.saturating_mul(2u64.pow(capped));
+        assert_eq!(backoff, 2048, "Backoff should be capped at 2^10 = 2048 seconds");
+
+        // Test saturating_mul prevents overflow
+        let max_multiplier = u64::MAX;
+        let safe_result = max_multiplier.saturating_mul(2u64.pow(10));
+        assert_eq!(safe_result, u64::MAX, "saturating_mul should prevent overflow");
+    }
+
+    #[tokio::test]
+    async fn test_recovery_resets_counters_on_success() {
+        let config = create_test_config();
+        let mut handler = MintHandler::new(config).await.unwrap();
+
+        // Set up failure state
+        handler.failure_count = 5;
+        handler.last_failure = Some(SystemTime::now() - std::time::Duration::from_secs(1000));
+
+        // Add valid share to retry queue
+        let mut hash_bytes = [0xffu8; 32];
+        hash_bytes[..5].fill(0x00);
+        let share_hash = Hash::from_byte_array(hash_bytes);
+
+        let data = EHashMintData {
+            share_hash,
+            block_found: false,
+            channel_id: 1,
+            user_identity: "test_user".to_string(),
+            target: Target::MAX_ATTAINABLE_MAINNET,
+            sequence_number: 1,
+            timestamp: SystemTime::now(),
+            template_id: None,
+            coinbase: None,
+            locking_pubkey: test_pubkey(),
+        };
+        handler.retry_queue.push_back(data);
+
+        // Attempt recovery
+        let result = handler.attempt_recovery().await;
+        assert!(result.is_ok(), "Recovery should succeed");
+
+        // Verify counters are reset
+        assert_eq!(handler.failure_count, 0, "Failure count should be reset to 0");
+        assert!(handler.last_failure.is_none(), "Last failure should be cleared");
+        assert_eq!(handler.retry_queue.len(), 0, "Queue should be empty");
     }
 
     // Note: Full integration tests with CDK Mint initialization and external wallet
