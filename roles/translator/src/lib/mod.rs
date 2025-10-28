@@ -106,6 +106,10 @@ impl TranslatorSv2 {
         };
 
 
+        // Get default locking_pubkey from config (mandatory for eHash-enabled translator)
+        let default_locking_pubkey = self.config.decode_default_locking_pubkey()
+            .expect("default_locking_pubkey must be valid - should have been validated at startup");
+
         let channel_manager = Arc::new(ChannelManager::new(
             channel_manager_to_upstream_sender,
             upstream_to_channel_manager_receiver,
@@ -116,6 +120,7 @@ impl TranslatorSv2 {
             } else {
                 ChannelMode::NonAggregated
             },
+            default_locking_pubkey,
         ));
 
         let downstream_addr = SocketAddr::new(

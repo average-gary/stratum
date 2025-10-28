@@ -10,6 +10,34 @@ use crate::{
     utils::validate_sv1_share,
 };
 
+/// Extracts hpub-encoded locking pubkey from miner username.
+///
+/// Supports the format: `hpub.worker-name`
+/// - The hpub is the FIRST part before the period
+/// - Everything after the period is the worker name
+///
+/// Examples:
+/// - Direct hpub: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw"
+/// - With worker name: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw.worker1"
+///
+/// # Arguments
+/// * `username` - The username string from mining.authorize
+///
+/// # Returns
+/// * `Some(hpub_str)` - The extracted hpub string if found
+/// * `None` - If no hpub found in username
+fn extract_hpub_from_username(username: &str) -> Option<&str> {
+    // Split by period and get the first part
+    let first_part = username.split('.').next()?;
+
+    // Check if the first part is a valid hpub (starts with "hpub1")
+    if first_part.starts_with("hpub1") {
+        Some(first_part)
+    } else {
+        None
+    }
+}
+
 // Implements `IsServer` for `Downstream` to handle the Sv1 messages.
 impl IsServer<'static> for DownstreamData {
     fn handle_configure(
@@ -57,37 +85,10 @@ impl IsServer<'static> for DownstreamData {
         info!("Received mining.authorize from Sv1 downstream");
         debug!("Down: Handling mining.authorize: {:?}", request);
 
-        // TODO: Extract locking_pubkey from request.name (user_identity)
-        // For eHash support, the user_identity should contain an hpub-encoded
-        // secp256k1 public key. Parse the user_identity and store it in
-        // self.locking_pubkey for use in share submissions.
-        //
-        // Expected formats:
-        //   - Direct hpub: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw"
-        //   - HIP-2 format: "username.hpub1..."
-        //   - Or extract from custom format based on pool requirements
-        //
-        // If extraction fails or no pubkey found in username, fall back to
-        // config.default_locking_pubkey (also hpub format). The config validator
-        // ensures default_locking_pubkey is present when ehash_wallet is configured.
-        // If ehash is not configured, locking_pubkey stays as generator point G (sentinel).
-        //
-        // Implementation:
-        //   use ehash_integration::hpub::parse_hpub;
-        //
-        //   // Try to extract hpub from username (e.g., split by '.' and find hpub1 prefix)
-        //   if let Some(hpub_str) = extract_hpub_from_username(&request.name) {
-        //       if let Ok(pubkey) = parse_hpub(hpub_str) {
-        //           self.locking_pubkey = pubkey;
-        //       }
-        //   }
-        //
-        //   // Fall back to config default if extraction failed
-        //   if self.locking_pubkey == TranslatorConfig::null_locking_pubkey() {
-        //       if let Ok(default) = config.decode_default_locking_pubkey() {
-        //           self.locking_pubkey = default;
-        //       }
-        //   }
+        // Locking pubkey extraction is now handled in authorize() method below.
+        // Username format: hpub.worker-name
+        // - hpub is the FIRST part before the period
+        // - Falls back to config.default_locking_pubkey if extraction fails
 
         true
     }
@@ -138,11 +139,39 @@ impl IsServer<'static> for DownstreamData {
         self.authorized_worker_name == *name
     }
 
-    /// Authorizes a Downstream role.
+    /// Authorizes a Downstream role and extracts locking_pubkey from username.
     fn authorize(&mut self, name: &str) {
         let name: String = name.into();
         if !self.is_authorized(&name) {
             self.authorized_worker_name = name.to_string();
+        }
+
+        // Extract locking_pubkey from username (hpub format)
+        // This enables per-miner eHash accounting where each downstream can specify
+        // their own locking_pubkey for receiving eHash tokens
+        if let Some(hpub_str) = extract_hpub_from_username(&name) {
+            match ehash_integration::hpub::parse_hpub(hpub_str) {
+                Ok(pubkey) => {
+                    self.locking_pubkey = pubkey;
+                    info!(
+                        "Extracted locking_pubkey from username for downstream {}: {}",
+                        self.downstream_id, hpub_str
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to parse hpub from username '{}': {:?}, using config default",
+                        name, e
+                    );
+                    // locking_pubkey remains as initialized (config default from TranslatorConfig.ehash_locking_pubkey)
+                }
+            }
+        } else {
+            debug!(
+                "No hpub found in username '{}' for downstream {}, using config default locking_pubkey",
+                name, self.downstream_id
+            );
+            // locking_pubkey remains as initialized (config default from TranslatorConfig.ehash_locking_pubkey)
         }
     }
 

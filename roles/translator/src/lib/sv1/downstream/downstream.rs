@@ -55,12 +55,14 @@ impl Downstream {
         target: Target,
         hashrate: Option<f32>,
         sv1_server_data: Arc<Mutex<Sv1ServerData>>,
+        default_locking_pubkey: stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey,
     ) -> Self {
         let downstream_data = Arc::new(Mutex::new(DownstreamData::new(
             downstream_id,
             target,
             hashrate,
             sv1_server_data,
+            default_locking_pubkey,
         )));
         let downstream_channel_state = DownstreamChannelState::new(
             downstream_sv1_sender,

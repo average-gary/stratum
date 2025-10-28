@@ -54,7 +54,7 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
         m: OpenExtendedMiningChannelSuccess<'_>,
     ) -> Result<(), Self::Error> {
         // Check if we have the pending channel data, return error if not
-        let (user_identity, nominal_hashrate, downstream_extranonce_len, _downstream_id, _placeholder_pubkey): (String, f32, usize, u32, _) = self
+        let (user_identity, nominal_hashrate, downstream_extranonce_len, _downstream_id, locking_pubkey): (String, f32, usize, u32, _) = self
             .channel_manager_data
             .safe_lock(|channel_manager_data| {
                 channel_manager_data.pending_channels.remove(&m.request_id)
@@ -68,16 +68,8 @@ impl HandleMiningMessagesFromServerAsync for ChannelManager {
                 TproxyError::PendingChannelNotFound(m.request_id)
             })?;
 
-        // Extract locking_pubkey from user_identity (hpub format)
-        // Try to parse as hpub; if it fails, use null pubkey
-        let locking_pubkey = ehash_integration::hpub::parse_hpub(&user_identity)
-            .unwrap_or_else(|e| {
-                debug!(
-                    "Failed to parse hpub from user_identity '{}': {:?}, using null pubkey",
-                    user_identity, e
-                );
-                crate::config::TranslatorConfig::null_locking_pubkey()
-            });
+        // locking_pubkey comes from pending_channels (either downstream's actual pubkey
+        // from authorization, or config default as fallback)
 
         // Save channel_id before m is moved
         let channel_id = m.channel_id;

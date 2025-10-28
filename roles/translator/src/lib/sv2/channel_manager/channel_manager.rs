@@ -65,6 +65,7 @@ impl ChannelManager {
     /// * `sv1_server_sender` - Channel to send messages to SV1 server
     /// * `sv1_server_receiver` - Channel to receive messages from SV1 server
     /// * `mode` - Operating mode (Aggregated or NonAggregated)
+    /// * `default_locking_pubkey` - Default locking pubkey from config for eHash fallback
     ///
     /// # Returns
     /// A new ChannelManager instance ready to handle message routing
@@ -74,6 +75,7 @@ impl ChannelManager {
         sv1_server_sender: Sender<Mining<'static>>,
         sv1_server_receiver: Receiver<Mining<'static>>,
         mode: ChannelMode,
+        default_locking_pubkey: stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey,
     ) -> Self {
         let channel_state = ChannelState::new(
             upstream_sender,
@@ -81,7 +83,7 @@ impl ChannelManager {
             sv1_server_sender,
             sv1_server_receiver,
         );
-        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode)));
+        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData::new(mode, default_locking_pubkey)));
         Self {
             channel_state,
             channel_manager_data,
@@ -432,15 +434,16 @@ impl ChannelManager {
                 open_channel_msg.min_extranonce_size = upstream_min_extranonce_size as u16;
 
                 // Store the user identity, hashrate, original downstream extranonce size,
-                // downstream_id (from request_id), and a placeholder pubkey (will be extracted later)
+                // downstream_id (from request_id), and config default locking pubkey (will be overridden
+                // by downstream's actual pubkey if they provide one during authorization)
                 // Note: In OpenExtendedMiningChannel, request_id IS the downstream_id
                 let downstream_id = open_channel_msg.request_id;
-                let placeholder_pubkey = crate::config::TranslatorConfig::null_locking_pubkey();
+                let default_pubkey = self.channel_manager_data.safe_lock(|c| c.default_locking_pubkey).unwrap();
 
                 self.channel_manager_data.super_safe_lock(|c| {
                     c.pending_channels.insert(
                         open_channel_msg.request_id,
-                        (user_identity.clone(), hashrate, min_extranonce_size, downstream_id, placeholder_pubkey),
+                        (user_identity.clone(), hashrate, min_extranonce_size, downstream_id, default_pubkey),
                     );
                 });
 
@@ -672,10 +675,17 @@ mod tests {
     };
 
     fn create_test_channel_manager(mode: ChannelMode) -> ChannelManager {
+        use stratum_apps::stratum_core::bitcoin::secp256k1::{Secp256k1, SecretKey, PublicKey};
+
         let (upstream_sender, _upstream_receiver) = unbounded();
         let (_upstream_sender2, upstream_receiver) = unbounded();
         let (sv1_server_sender, _sv1_server_receiver) = unbounded();
         let (_sv1_server_sender2, sv1_server_receiver) = unbounded();
+
+        // Create test pubkey for default_locking_pubkey
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let test_pubkey = PublicKey::from_secret_key(&secp, &secret);
 
         ChannelManager::new(
             upstream_sender,
@@ -683,6 +693,7 @@ mod tests {
             sv1_server_sender,
             sv1_server_receiver,
             mode,
+            test_pubkey,
         )
     }
 
@@ -736,9 +747,15 @@ mod tests {
         };
 
         // Store the pending channel information
+        // Create test pubkey for the pending channel
+        use stratum_apps::stratum_core::bitcoin::secp256k1::{Secp256k1, SecretKey, PublicKey};
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let test_pubkey = PublicKey::from_secret_key(&secp, &secret);
+
         manager.channel_manager_data.super_safe_lock(|data| {
             data.pending_channels
-                .insert(1, ("test_user".to_string(), 1000.0, 4));
+                .insert(1, ("test_user".to_string(), 1000.0, 4, 1, test_pubkey));
         });
 
         // Test that the message can be handled without panicking
@@ -840,13 +857,20 @@ mod tests {
 
     #[test]
     fn test_channel_manager_data_access() {
+        use stratum_apps::stratum_core::bitcoin::secp256k1::{Secp256k1, SecretKey, PublicKey};
+
         let manager = create_test_channel_manager(ChannelMode::NonAggregated);
+
+        // Create test pubkey for the pending channel
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let test_pubkey = PublicKey::from_secret_key(&secp, &secret);
 
         // Test that we can access and modify channel manager data
         manager.channel_manager_data.super_safe_lock(|data| {
-            // Add a pending channel
+            // Add a pending channel (user_identity, hashrate, extranonce_len, downstream_id, locking_pubkey)
             data.pending_channels
-                .insert(1, ("test".to_string(), 100.0, 4));
+                .insert(1, ("test".to_string(), 100.0, 4, 1, test_pubkey));
         });
 
         let has_pending = manager

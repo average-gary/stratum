@@ -12,7 +12,7 @@ use stratum_apps::{
 use tracing::debug;
 
 use super::SubmitShareWithChannelId;
-use crate::{config::TranslatorConfig, sv1::sv1_server::data::Sv1ServerData};
+use crate::sv1::sv1_server::data::Sv1ServerData;
 
 #[derive(Debug)]
 pub struct DownstreamData {
@@ -56,6 +56,7 @@ impl DownstreamData {
         target: Target,
         hashrate: Option<f32>,
         sv1_server_data: Arc<Mutex<Sv1ServerData>>,
+        default_locking_pubkey: PublicKey,
     ) -> Self {
         DownstreamData {
             channel_id: None,
@@ -79,8 +80,8 @@ impl DownstreamData {
             pending_share: RefCell::new(None),
             sv1_server_data,
             upstream_target: None,
-            // Initialize with null pubkey - will be set during authorization
-            locking_pubkey: TranslatorConfig::null_locking_pubkey(),
+            // Initialize with config default - may be overridden during authorization
+            locking_pubkey: default_locking_pubkey,
         }
     }
 

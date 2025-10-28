@@ -265,6 +265,10 @@ impl Sv1Server {
 
                             let connection = ConnectionSV1::new(stream).await;
                             let downstream_id = self.sv1_server_data.super_safe_lock(|v| v.downstream_id_factory.fetch_add(1, Ordering::Relaxed));
+                            // Get default locking_pubkey from config (mandatory for eHash-enabled translator)
+                            let default_locking_pubkey = self.config.decode_default_locking_pubkey()
+                                .expect("default_locking_pubkey must be valid - should have been validated at startup");
+
                             let downstream = Arc::new(Downstream::new(
                                 downstream_id,
                                 connection.sender().clone(),
@@ -274,6 +278,7 @@ impl Sv1Server {
                                 first_target,
                                 Some(self.config.downstream_difficulty_config.min_individual_miner_hashrate),
                                 self.sv1_server_data.clone(),
+                                default_locking_pubkey,
                             ));
                             // vardiff initialization (only if enabled)
                             _ = self.sv1_server_data
@@ -847,6 +852,13 @@ mod tests {
         let upstream = Upstream::new("127.0.0.1".to_string(), 4444, pubkey);
         let difficulty_config = DownstreamDifficultyConfig::new(100.0, 5.0, true);
 
+        // Create test hpub for default_locking_pubkey
+        use stratum_apps::stratum_core::bitcoin::secp256k1::{Secp256k1, SecretKey, PublicKey};
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[1u8; 32]).unwrap();
+        let test_pubkey = PublicKey::from_secret_key(&secp, &secret);
+        let test_hpub = ehash_integration::hpub::encode_hpub(&test_pubkey).unwrap();
+
         TranslatorConfig::new(
             vec![upstream],
             "0.0.0.0".to_string(), // downstream_address
@@ -856,7 +868,8 @@ mod tests {
             1,                     // min_supported_version
             4,                     // downstream_extranonce2_size
             "test_user".to_string(),
-            true, // aggregate_channels
+            true,      // aggregate_channels
+            test_hpub, // default_locking_pubkey
         )
     }
 

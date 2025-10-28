@@ -67,6 +67,9 @@ pub struct ChannelManagerData {
     /// This persists for the lifetime of the channel and is used to get the locking_pubkey
     /// when forwarding SubmitSharesExtended upstream.
     pub channel_ehash_data: HashMap<u32, ChannelEHashData>,
+    /// Default locking pubkey for eHash minting (from config).
+    /// Used as fallback when downstream miners don't provide their own locking_pubkey.
+    pub default_locking_pubkey: PublicKey,
 }
 
 impl ChannelManagerData {
@@ -74,10 +77,11 @@ impl ChannelManagerData {
     ///
     /// # Arguments
     /// * `mode` - The operational mode (Aggregated or NonAggregated)
+    /// * `default_locking_pubkey` - Default locking pubkey from config for eHash fallback
     ///
     /// # Returns
     /// A new ChannelManagerData instance with empty state
-    pub fn new(mode: ChannelMode) -> Self {
+    pub fn new(mode: ChannelMode, default_locking_pubkey: PublicKey) -> Self {
         Self {
             pending_channels: HashMap::new(),
             extended_channels: HashMap::new(),
@@ -87,6 +91,7 @@ impl ChannelManagerData {
             share_sequence_counters: HashMap::new(),
             extranonce_factories: None,
             channel_ehash_data: HashMap::new(),
+            default_locking_pubkey,
         }
     }
 

@@ -374,15 +374,15 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Files**: TProxy integration tests
 
 ### 6.6 Implement hpub extraction from miner username
-- [ ] Create `extract_hpub_from_username()` helper function
-- [ ] Parse miner username in `handle_authorize()` to extract hpub
-- [ ] Support multiple formats: direct hpub, HIP-2 format (username.hpub1...), custom formats
-- [ ] Use `ehash_integration::hpub::parse_hpub()` to validate and decode
-- [ ] Fall back to `config.decode_default_locking_pubkey()` if extraction fails
-- [ ] Store extracted pubkey in `DownstreamData.locking_pubkey` for share submissions
+- [x] Create `extract_hpub_from_username()` helper function
+- [x] Parse miner username in `authorize()` to extract hpub
+- [x] Support multiple formats: direct hpub, HIP-2 format (username.hpub1...), comma-separated
+- [x] Use `ehash_integration::hpub::parse_hpub()` to validate and decode
+- [x] Fall back to initialized locking_pubkey (null or config default) if extraction fails
+- [x] Store extracted pubkey in `DownstreamData.locking_pubkey` for share submissions
 - **Requirements**: 2.5, 5.2
-- **Files**: `roles/translator/src/lib/sv1/downstream/message_handler.rs` (handle_authorize function)
-- **Implementation Note**: Enables per-miner eHash accounting where each downstream miner can have their own locking pubkey for receiving eHash tokens
+- **Files**: `roles/translator/src/lib/sv1/downstream/message_handler.rs:26-44,175-212`
+- **Implementation Note**: Enables per-miner eHash accounting where each downstream miner can have their own locking pubkey for receiving eHash tokens. Supports formats: `hpub1...`, `username.hpub1...`, `username,hpub1...`
 
 ## Phase 7: JDC Role Integration
 

@@ -13,7 +13,6 @@
 use std::path::{Path, PathBuf};
 
 use stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey;
-use ehash_integration::config::WalletConfig;
 use ehash_integration::hpub::parse_hpub;
 use serde::Deserialize;
 use stratum_apps::key_utils::Secp256k1PublicKey;
@@ -41,15 +40,17 @@ pub struct TranslatorConfig {
     /// Whether to aggregate all downstream connections into a single upstream channel.
     /// If true, all miners share one channel. If false, each miner gets its own channel.
     pub aggregate_channels: bool,
-    /// Optional eHash wallet configuration for tracking downstream miner eHash accounting
-    /// When provided, the TProxy will track eHash balances and statistics for multiple
-    /// downstream miners. External wallets handle token redemption via authenticated API.
-    pub ehash_wallet: Option<WalletConfig>,
-    /// Optional default locking pubkey for eHash minting (hex-encoded 33-byte compressed secp256k1)
+    /// **MANDATORY** Default locking pubkey for eHash minting (hpub-encoded secp256k1 public key)
     /// Used as fallback when downstream SV1 miners don't provide their own locking pubkey
     /// in their username. This enables eHash support for legacy miners that don't know
-    /// about eHash protocol extensions. Format: 66 hex characters (e.g., "02a1b2c3...")
-    pub default_locking_pubkey: Option<String>,
+    /// about eHash protocol extensions.
+    ///
+    /// Format: hpub1... (bech32-encoded, e.g., "hpub1qyq2fw8qdwmhzgfzecvl5a...")
+    ///
+    /// This eHash-enabled translator requires a valid locking pubkey. The process will fail
+    /// to start if this is not configured. If you don't need eHash support, use the standard
+    /// translator instead.
+    pub default_locking_pubkey: String,
     /// The path to the log file for the Translator.
     log_file: Option<PathBuf>,
 }
@@ -89,6 +90,7 @@ impl TranslatorConfig {
         downstream_extranonce2_size: u16,
         user_identity: String,
         aggregate_channels: bool,
+        default_locking_pubkey: String,
     ) -> Self {
         Self {
             upstreams,
@@ -100,8 +102,7 @@ impl TranslatorConfig {
             user_identity,
             downstream_difficulty_config,
             aggregate_channels,
-            ehash_wallet: None,
-            default_locking_pubkey: None,
+            default_locking_pubkey,
             log_file: None,
         }
     }
@@ -115,48 +116,33 @@ impl TranslatorConfig {
         self.log_file.as_deref()
     }
 
-    /// Returns the optional eHash wallet configuration.
-    pub fn ehash_wallet(&self) -> Option<&WalletConfig> {
-        self.ehash_wallet.as_ref()
-    }
-
-    /// Returns the optional default locking pubkey for eHash minting.
+    /// Returns the default locking pubkey for eHash minting (hpub format).
     /// This pubkey is used as a fallback when downstream miners don't provide their own.
-    pub fn default_locking_pubkey(&self) -> Option<&str> {
-        self.default_locking_pubkey.as_deref()
+    pub fn default_locking_pubkey(&self) -> &str {
+        &self.default_locking_pubkey
     }
 
     /// Validates the configuration to ensure eHash settings are consistent.
     ///
     /// # Validation Rules
-    /// - If `ehash_wallet` is configured, `default_locking_pubkey` MUST also be configured
-    /// - If `default_locking_pubkey` is configured, it must be valid hpub format
+    /// - `default_locking_pubkey` MUST be valid hpub format (mandatory for eHash-enabled translator)
     ///
     /// # Errors
     /// Returns an error string describing the validation failure.
     pub fn validate_ehash_config(&self) -> Result<(), String> {
-        // If ehash_wallet is configured, default_locking_pubkey is required
-        if self.ehash_wallet.is_some() && self.default_locking_pubkey.is_none() {
+        // Validate hpub format (always required)
+        if !self.default_locking_pubkey.starts_with("hpub1") {
             return Err(
-                "Configuration error: 'default_locking_pubkey' is required when 'ehash_wallet' is configured. \
-                 This pubkey is used as fallback for miners that don't provide their own. \
-                 Format: hpub1... (bech32-encoded secp256k1 public key)".to_string()
+                "Configuration error: 'default_locking_pubkey' must be in hpub format (starting with 'hpub1'). \
+                 This eHash-enabled translator requires a valid locking pubkey. \
+                 If you don't need eHash support, use the standard translator instead.".to_string()
             );
         }
 
-        // Validate hpub format if default_locking_pubkey is provided
-        if let Some(ref hpub_str) = self.default_locking_pubkey {
-            // Check if it starts with hpub1 (hpub HRP + bech32 separator)
-            if !hpub_str.starts_with("hpub1") {
-                return Err(
-                    "Configuration error: 'default_locking_pubkey' must be in hpub format (starting with 'hpub1')".to_string()
-                );
-            }
-
-            // Try to parse to validate format
-            parse_hpub(hpub_str)
-                .map_err(|e| format!("Configuration error: invalid 'default_locking_pubkey' hpub format: {}", e))?;
-        }
+        // Try to parse to validate format
+        parse_hpub(&self.default_locking_pubkey)
+            .map_err(|e| format!("Configuration error: invalid 'default_locking_pubkey' hpub format: {}. \
+                                  Process cannot start without valid eHash configuration.", e))?;
 
         Ok(())
     }
@@ -164,31 +150,13 @@ impl TranslatorConfig {
     /// Decodes the default locking pubkey from hpub format to a secp256k1 PublicKey.
     ///
     /// # Returns
-    /// - `Ok(PublicKey)` if configured and valid
-    /// - `Err(String)` if not configured or decoding fails
+    /// - `Ok(PublicKey)` if valid
+    /// - `Err(String)` if decoding fails
     pub fn decode_default_locking_pubkey(&self) -> Result<PublicKey, String> {
-        match &self.default_locking_pubkey {
-            Some(hpub_str) => {
-                parse_hpub(hpub_str)
-                    .map_err(|e| format!("Failed to parse default_locking_pubkey from hpub format: {}", e))
-            }
-            None => Err("default_locking_pubkey is not configured".to_string()),
-        }
+        parse_hpub(&self.default_locking_pubkey)
+            .map_err(|e| format!("Failed to parse default_locking_pubkey from hpub format: {}", e))
     }
 
-    /// Returns a sentinel public key for initialization (indicates no eHash support)
-    ///
-    /// This uses a well-known "nothing up my sleeve" pubkey (generator point G)
-    /// that can be used as a placeholder. The Pool will reject shares with this
-    /// sentinel pubkey for eHash minting since no one controls its private key.
-    pub fn null_locking_pubkey() -> PublicKey {
-        // Use the generator point G as sentinel (well-known, no one has private key)
-        // 0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
-        let g_bytes = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-            .expect("hardcoded generator point should decode");
-        PublicKey::from_slice(&g_bytes)
-            .expect("generator point G should always be valid")
-    }
 }
 
 /// Configuration settings for managing difficulty adjustments on the downstream connection.
@@ -273,6 +241,7 @@ mod tests {
             4,
             "test_user".to_string(),
             true,
+            create_test_hpub(),
         );
 
         assert_eq!(config.upstreams.len(), 1);
@@ -301,6 +270,7 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            create_test_hpub(),
         );
 
         assert!(config.log_dir().is_none());
@@ -333,6 +303,7 @@ mod tests {
             4,
             "test_user".to_string(),
             true,
+            create_test_hpub(),
         );
 
         assert_eq!(config.upstreams.len(), 2);
@@ -358,6 +329,7 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            create_test_hpub(),
         );
 
         assert!(!config.downstream_difficulty_config.enable_vardiff);
@@ -365,48 +337,11 @@ mod tests {
     }
 
     #[test]
-    fn test_ehash_config_validation_requires_default_pubkey() {
-        use ehash_integration::config::WalletConfig;
-
-        let upstreams = vec![create_test_upstream()];
-        let difficulty_config = create_test_difficulty_config();
-
-        let mut config = TranslatorConfig::new(
-            upstreams,
-            "0.0.0.0".to_string(),
-            3333,
-            difficulty_config,
-            2,
-            1,
-            4,
-            "test_user".to_string(),
-            false,
-        );
-
-        // Add ehash_wallet without default_locking_pubkey - should fail validation
-        config.ehash_wallet = Some(WalletConfig {
-            mint_url: None,
-            max_retries: 10,
-            backoff_multiplier: 2,
-            recovery_enabled: true,
-            log_level: None,
-        });
-
-        let result = config.validate_ehash_config();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("default_locking_pubkey' is required"));
-    }
-
-    #[test]
     fn test_ehash_config_validation_valid_pubkey() {
-        use ehash_integration::config::WalletConfig;
-
         let upstreams = vec![create_test_upstream()];
         let difficulty_config = create_test_difficulty_config();
 
-        let mut config = TranslatorConfig::new(
+        let config = TranslatorConfig::new(
             upstreams,
             "0.0.0.0".to_string(),
             3333,
@@ -416,18 +351,10 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            create_test_hpub(),
         );
 
-        // Add ehash_wallet WITH valid default_locking_pubkey (hpub format) - should pass validation
-        config.ehash_wallet = Some(WalletConfig {
-            mint_url: None,
-            max_retries: 10,
-            backoff_multiplier: 2,
-            recovery_enabled: true,
-            log_level: None,
-        });
-        config.default_locking_pubkey = Some(create_test_hpub());
-
+        // Valid hpub should pass validation
         let result = config.validate_ehash_config();
         assert!(result.is_ok());
     }
@@ -437,7 +364,7 @@ mod tests {
         let upstreams = vec![create_test_upstream()];
         let difficulty_config = create_test_difficulty_config();
 
-        let mut config = TranslatorConfig::new(
+        let config = TranslatorConfig::new(
             upstreams,
             "0.0.0.0".to_string(),
             3333,
@@ -447,9 +374,8 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            "not_an_hpub".to_string(), // Invalid format
         );
-
-        config.default_locking_pubkey = Some("not_an_hpub".to_string()); // Invalid format
 
         let result = config.validate_ehash_config();
         assert!(result.is_err());
@@ -461,7 +387,7 @@ mod tests {
         let upstreams = vec![create_test_upstream()];
         let difficulty_config = create_test_difficulty_config();
 
-        let mut config = TranslatorConfig::new(
+        let config = TranslatorConfig::new(
             upstreams,
             "0.0.0.0".to_string(),
             3333,
@@ -471,10 +397,8 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            "hpub1invalid".to_string(), // Invalid hpub encoding
         );
-
-        // Invalid hpub (starts with hpub1 but has invalid encoding)
-        config.default_locking_pubkey = Some("hpub1invalid".to_string());
 
         let result = config.validate_ehash_config();
         assert!(result.is_err());
@@ -486,7 +410,7 @@ mod tests {
         let upstreams = vec![create_test_upstream()];
         let difficulty_config = create_test_difficulty_config();
 
-        let mut config = TranslatorConfig::new(
+        let config = TranslatorConfig::new(
             upstreams,
             "0.0.0.0".to_string(),
             3333,
@@ -496,9 +420,8 @@ mod tests {
             4,
             "test_user".to_string(),
             false,
+            create_test_hpub(),
         );
-
-        config.default_locking_pubkey = Some(create_test_hpub());
 
         let decoded = config.decode_default_locking_pubkey();
         assert!(decoded.is_ok());
@@ -509,15 +432,4 @@ mod tests {
         assert!(bytes[0] == 0x02 || bytes[0] == 0x03);
     }
 
-    #[test]
-    fn test_null_locking_pubkey() {
-        let null_pubkey = TranslatorConfig::null_locking_pubkey();
-        let bytes = null_pubkey.serialize();
-        assert_eq!(bytes.len(), 33);
-        assert_eq!(bytes[0], 0x02); // Compressed pubkey prefix
-        // Should be the generator point G (well-known point, no one has private key)
-        let expected_g = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-            .expect("valid hex");
-        assert_eq!(bytes, expected_g.as_slice());
-    }
 }
