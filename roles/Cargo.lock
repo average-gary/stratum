@@ -3569,6 +3569,7 @@ dependencies = [
  "serde",
  "stratum-apps",
  "tokio",
+ "toml",
  "tracing",
 ]
 
