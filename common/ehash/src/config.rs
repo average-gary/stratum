@@ -60,18 +60,13 @@ pub struct MintConfig {
 /// Configuration for the Wallet handler
 ///
 /// This configuration is used by:
-/// - TProxy role: To track share correlation and query P2PK-locked tokens
+/// - TProxy role: To track eHash accounting for multiple downstream miners
 /// - JDC role in wallet mode: To track share correlation for JDC operations
+///
+/// Note: TProxy tracks multiple downstream miners' pubkeys (from user_identity hpubs),
+/// so it does not have a single locking_pubkey. The pubkeys come from correlation events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WalletConfig {
-    /// Locking pubkey for P2PK token authentication
-    /// Format: bech32-encoded with 'hpub' prefix (e.g., "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k...")
-    pub locking_pubkey: String,
-
-    /// Optional user identity
-    /// If not provided, will be derived from locking_pubkey
-    pub user_identity: Option<String>,
-
     /// Optional mint URL for HASH unit wallet integration
     /// If provided, enables automatic wallet operations for correlation tracking
     pub mint_url: Option<MintUrl>,
@@ -183,15 +178,14 @@ mod tests {
     #[test]
     fn test_wallet_config() {
         let config_toml = r#"
-            locking_pubkey = "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k"
             mint_url = "https://mint.example.com"
-            user_identity = "test_user"
         "#;
 
         let config: WalletConfig = toml::from_str(config_toml).unwrap();
-        assert_eq!(config.locking_pubkey, "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k");
-        assert_eq!(config.user_identity, Some("test_user".to_string()));
         assert!(config.mint_url.is_some());
+        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.backoff_multiplier, 2);
+        assert!(config.recovery_enabled);
     }
 
     #[test]
@@ -216,7 +210,7 @@ mod tests {
             mode = "wallet"
 
             [wallet]
-            locking_pubkey = "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7k"
+            mint_url = "https://mint.example.com"
         "#;
 
         let config: JdcEHashConfig = toml::from_str(config_toml).unwrap();

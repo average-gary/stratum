@@ -22,10 +22,10 @@ Based on analysis of the hashpool submodule at `deps/hashpool/protocols/ehash/`:
 
 ### CDK Integration Details
 - **Currency Unit**: Uses custom "HASH" unit type in CDK
-- **Single-Unit Architecture**: Each CDK Wallet is tied to one CurrencyUnit (TProxy uses HASH-only wallet)
+- **Single-Unit Architecture**: Mint uses HASH unit for eHash token issuance; TProxy tracks accounting only (no wallet needed)
 - **Keyset Structure**: 64 signing keys with amounts as powers of 2 (1, 2, 4, 8, ..., 2^63)
 - **Share Hash Format**: 32-byte canonical representation with SV2 type conversions
-- **Quote Protocol**: Structured requests with share hash, amount, locking pubkey, and "HASH" unit
+- **Quote Protocol**: Structured requests with share hash, amount, per-share locking pubkey, and "HASH" unit
 - **eHash-to-Sats Conversion**: Use eHash tokens to create PAID quotes for sats redemption (custom mint logic)
 
 ### Key Functions Available
@@ -453,6 +453,9 @@ pub struct JdcEHashConfig {
 
     /// Mint configuration (used when mode = "mint")
     pub mint: Option<MintConfig>,
+
+    /// Wallet configuration (used when mode = "wallet")
+    pub wallet: Option<WalletConfig>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -461,7 +464,7 @@ pub enum JdcEHashMode {
     /// JDC acts as a mint, processing share validation results
     Mint,
     /// JDC tracks eHash accounting, processing SubmitSharesSuccess correlation
-    Ehash,
+    Wallet,
 }
 
 // JDC initialization based on configuration
@@ -479,9 +482,11 @@ impl JdcChannelManager {
                     self.mint_sender = Some(mint_sender);
                 }
             }
-            JdcEHashMode::Ehash => {
-                let ehash_sender = spawn_ehash_handler_thread(task_manager, shutdown_rx);
-                self.ehash_sender = Some(ehash_sender);
+            JdcEHashMode::Wallet => {
+                if let Some(wallet_config) = config.wallet {
+                    let wallet_sender = spawn_wallet_thread(task_manager, wallet_config, shutdown_rx).await?;
+                    self.wallet_sender = Some(wallet_sender);
+                }
             }
         }
         Ok(self)
@@ -643,7 +648,7 @@ impl ShareEvent {
 
 #### TProxy Role - SubmitSharesSuccess
 ```rust
-// TProxy creates ShareEvent with correlation key for wallet redemption
+// TProxy creates correlation data for eHash accounting (external wallets handle redemption)
 impl ShareEvent {
     pub fn from_submit_shares_success(
         msg: SubmitSharesSuccess, 
@@ -672,7 +677,7 @@ impl ShareEvent {
     }
 }
 
-// TProxy wallet uses correlation key to query mint for matching eHash tokens
+// External wallets can query mint for tokens using correlation data
 pub struct WalletRedemptionQuery {
     pub mint_url: MintUrl,
     pub correlation_key: ShareCorrelationKey,
@@ -1037,19 +1042,22 @@ Based on analysis of the hashpool submodule at `deps/hashpool`, the following ha
 
 ### Key Protocol Elements
 
-- **Locking Pubkeys**: Enable wallet authentication with mint (established at connection setup)
-- **PAID Quotes**: Pool creates quotes in PAID status when shares are validated  
-- **Channel/Sequence Correlation**: Unique identifiers (channel_id, sequence_number) for quote lookup
+- **Locking Pubkeys**: Each downstream miner specifies their pubkey via user_identity (hpub format) at connection setup; enables NUT-20 authentication
+- **PAID Quotes**: Pool creates quotes in PAID status when shares are validated, with per-share locking pubkey from TLV
+- **Channel/Sequence Correlation**: Unique identifiers (channel_id, sequence_number) for tracking shares
 - **Blinded Secrets**: Standard Cashu protocol for privacy-preserving token minting
 
 ### Implementation Impact
 
-This uses locking pubkeys for authentication and channel/sequence for correlation:
+This uses per-miner locking pubkeys for authentication:
 
-1. **TProxy**: Configured with locking pubkey, exchanges it during connection setup
-2. **Pool (Mool)**: Creates PAID quotes tagged with (channel_id, sequence_number) and associated with locking pubkey
-3. **External Wallet**: Authenticates with locking pubkey and queries quotes by (channel_id, sequence_number)
-4. **Mint**: Supports quote lookup by locking pubkey authentication + (channel_id, sequence_number) filtering
+1. **Downstream Miners**: Each miner specifies their own locking pubkey in `user_identity` field (hpub format) when connecting to TProxy
+2. **TProxy**: Receives hpub from each downstream miner, validates format (disconnect if invalid), extracts secp256k1 pubkey, stores per-channel
+3. **Per-Share Submission**: TProxy includes the downstream miner's pubkey in TLV field 0x0004 when submitting shares upstream
+4. **Pool (Mool)**: Extracts pubkey from TLV 0x0004, includes in `EHashMintData.locking_pubkey`, creates NUT-20 P2PK-locked PAID quotes
+5. **External Wallet**: Authenticates with their private key (NUT-20 signature), queries mint for quotes by their locking pubkey
+6. **Mint**: Verifies NUT-20 signature, returns quote IDs associated with authenticated pubkey
+7. **Multi-Miner Support**: TProxy can handle multiple downstream miners simultaneously, each with their own unique locking pubkey
 
 ## eHash as Stratum v2 Extension
 
