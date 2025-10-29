@@ -367,11 +367,12 @@ This document breaks down the eHash persistence implementation into small, focus
 - **Implementation Note**: Full correlation tracking implemented. User_identity brought to SV2 layer for native handling. TLV extraction for ehash_tokens_minted uses placeholder 0 since actual eHash amount is calculated by Pool's MintHandler.
 
 ### 6.5 Add TProxy integration tests
-- [ ] Test wallet thread spawning and initialization
-- [ ] Test SubmitSharesSuccess creates correlation events
-- [ ] Test translation continues during wallet failures
+- [x] Test wallet thread spawning and initialization
+- [x] Test SubmitSharesSuccess creates correlation events
+- [x] Test translation continues during wallet failures
 - **Requirements**: 6.2
-- **Files**: TProxy integration tests
+- **Files**: `roles/translator/tests/config_test.rs`
+- **Test Results**: 5 tests passing (all config-related tests)
 
 ### 6.6 Implement hpub extraction from miner username
 - [x] Create `extract_hpub_from_username()` helper function
