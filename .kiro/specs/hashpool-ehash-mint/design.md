@@ -694,6 +694,102 @@ pub struct WalletRedemptionQuery {
 }
 ```
 
+#### JDC Role - Dual Mode Support
+
+JDC (Job Declarator Client) supports two distinct eHash modes for different operational scenarios:
+
+##### JDC Mint Mode (Terminal Mint)
+```rust
+// JDC operates as standalone pool with local eHash minting
+// Behavior:
+// 1. JDC mints eHash tokens LOCALLY for downstream miners
+// 2. JDC forwards shares UPSTREAM as normal miner using SubmitSharesExtended
+// 3. JDC uses its OWN locking_pubkey (from config) when communicating upstream
+// 4. Upstream Pool treats JDC like any other miner - unaware of JDC's local mint
+
+// Share validation in JDC (Mint mode)
+impl ChannelManager {
+    fn handle_valid_share(&self, share: SubmitSharesStandard) -> Result<(), JDCError> {
+        // Validate share against downstream channel
+        let share_hash = validate_share(&share)?;
+
+        // Calculate eHash amount and mint tokens locally
+        if let Some(mint_sender) = &self.mint_sender {
+            let ehash_amount = calculate_ehash_amount(share_hash, self.min_leading_zeros);
+            let mint_data = EHashMintData {
+                share_hash,
+                ehash_amount,
+                locking_pubkey: downstream_miner_pubkey, // Per-miner pubkey
+                timestamp: SystemTime::now(),
+            };
+            mint_sender.send(mint_data).await?;
+        }
+
+        // Forward share upstream using JDC's own pubkey
+        let upstream_message = SubmitSharesExtended {
+            // ... other fields ...
+            locking_pubkey: self.jdc_locking_pubkey,  // JDC's hpub from config
+        };
+        self.upstream_sender.send(upstream_message).await?;
+
+        Ok(())
+    }
+}
+```
+
+##### JDC Wallet Mode (Proxy/Translator)
+```rust
+// JDC acts like TProxy - tracks correlation, doesn't mint
+// Behavior:
+// 1. JDC does NOT mint locally - only tracks correlation data
+// 2. JDC forwards shares upstream with per-miner locking_pubkeys (Phase 8)
+// 3. Currently uses JDC's own locking_pubkey as fallback
+// 4. Upstream Pool mints eHash, JDC wallet tracks for accounting
+
+impl ChannelManager {
+    fn handle_submit_shares_success(
+        &self,
+        msg: SubmitSharesSuccess,
+        channel_id: u32
+    ) -> Result<(), JDCError> {
+        // Create correlation data for wallet tracking
+        if let Some(wallet_sender) = &self.wallet_sender {
+            let user_identity = self.get_user_identity_for_channel(channel_id)?;
+            let correlation_data = WalletCorrelationData {
+                channel_id: msg.channel_id,
+                sequence_number: msg.last_sequence_number as u64,
+                user_identity,
+                share_count: msg.new_submits_accepted_count,
+                share_work: msg.new_shares_sum,
+                timestamp: SystemTime::now(),
+            };
+            wallet_sender.send(correlation_data).await?;
+        }
+
+        Ok(())
+    }
+}
+
+// Upstream share submission uses per-miner pubkeys (Phase 8 enhancement)
+// Currently uses JDC's own pubkey as fallback until per-miner extraction implemented
+```
+
+##### JDC Configuration
+```toml
+# JDC locking pubkey (hpub format - consistent with TProxy/Pool)
+# Mint mode: JDC uses this when acting as normal miner upstream
+# Wallet mode: Used as fallback until per-miner pubkeys extracted
+jdc_locking_pubkey = "hpub1qgdq86h8jrvy9hkx6cq4kxjmhd93qmt8vv2rgvcf8sqfee54vkmvqkf79u6"
+
+[ehash_config]
+mode = "mint"  # or "wallet"
+
+[ehash_config.mint]
+mint_url = "https://mint.example.com"
+database_url = "sqlite://jdc_mint.db"
+min_leading_zeros = 32
+```
+
 #### Updated ShareEvent Structure
 ```rust
 use bitcoin::hashes::sha256d::Hash;

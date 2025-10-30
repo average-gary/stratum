@@ -19,7 +19,7 @@ use stratum_apps::{
         channels_sv2::client::extended::ExtendedChannel,
         framing_sv2::framing::Frame,
         handlers_sv2::HandleMiningMessagesFromServerAsync,
-        mining_sv2::OpenExtendedMiningChannelSuccess,
+        mining_sv2::{OpenExtendedMiningChannelSuccess, SubmitSharesExtended},
         parsers_sv2::{AnyMessage, Mining},
     },
 };
@@ -465,14 +465,25 @@ impl ChannelManager {
                         TproxyError::ChannelErrorSender
                     })?;
             }
-            Mining::SubmitSharesExtended(mut m) => {
+            Mining::SubmitSharesExtendedEHash(mut m) => {
+                // Convert to standard type for validation (validate_share expects standard type)
+                let m_for_validation = SubmitSharesExtended {
+                    channel_id: m.channel_id,
+                    sequence_number: m.sequence_number,
+                    job_id: m.job_id,
+                    nonce: m.nonce,
+                    ntime: m.ntime,
+                    version: m.version,
+                    extranonce: m.extranonce.clone(),
+                };
+
                 let value = self.channel_manager_data.super_safe_lock(|c| {
                     let extended_channel = c.extended_channels.get(&m.channel_id);
                     if let Some(extended_channel) = extended_channel {
                         let channel = extended_channel.write();
                         if let Ok(mut channel) = channel {
                             return Some((
-                                channel.validate_share(m.clone()),
+                                channel.validate_share(m_for_validation.clone()),
                                 channel.get_share_accounting().clone(),
                             ));
                         }
@@ -577,14 +588,14 @@ impl ChannelManager {
                     }
 
                     info!(
-                        "SubmitSharesExtended: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
+                        "SubmitSharesExtendedEHash: valid share, forwarding it to upstream | channel_id: {}, sequence_number: {} ☑️",
                         m.channel_id, m.sequence_number
                     );
 
-                    // Share already includes locking_pubkey - no correlation tracking needed
+                    // Share includes locking_pubkey for eHash minting
                     // Pool will mint eHash to that pubkey
 
-                    let frame: StdFrame = Message::Mining(Mining::SubmitSharesExtended(m))
+                    let frame: StdFrame = Message::Mining(Mining::SubmitSharesExtendedEHash(m))
                         .try_into()
                         .map_err(TproxyError::ParserError)?;
                     let frame: EitherFrame = frame.into();
@@ -776,10 +787,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_downstream_submit_shares_message() {
+        use stratum_apps::stratum_core::mining_sv2::SubmitSharesExtendedEHash;
+
         let _manager = create_test_channel_manager(ChannelMode::NonAggregated);
 
-        // Create a SubmitSharesExtended message
-        let submit_shares = SubmitSharesExtended {
+        // Create a SubmitSharesExtendedEHash message
+        let submit_shares = SubmitSharesExtendedEHash {
             channel_id: 1,
             sequence_number: 100,
             job_id: 42,
@@ -787,22 +800,22 @@ mod tests {
             ntime: 1234567890,
             version: 0x20000000,
             extranonce: vec![0x01, 0x02, 0x03, 0x04].try_into().unwrap(),
-            // Test with all-zeros locking pubkey (no eHash support)
-            locking_pubkey: vec![0u8; 33].try_into().unwrap(),
+            // Test with valid locking pubkey for eHash
+            locking_pubkey: vec![0x02; 33].try_into().unwrap(),
         };
 
         // Test that the message can be handled
-        let mining_message = Mining::SubmitSharesExtended(submit_shares);
+        let mining_message = Mining::SubmitSharesExtendedEHash(submit_shares);
 
         // Verify the message structure
         match mining_message {
-            Mining::SubmitSharesExtended(msg) => {
+            Mining::SubmitSharesExtendedEHash(msg) => {
                 assert_eq!(msg.channel_id, 1);
                 assert_eq!(msg.sequence_number, 100);
                 assert_eq!(msg.job_id, 42);
                 assert_eq!(msg.nonce, 0x12345678);
             }
-            _ => panic!("Expected SubmitSharesExtended"),
+            _ => panic!("Expected SubmitSharesExtendedEHash"),
         }
     }
 

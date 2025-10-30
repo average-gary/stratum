@@ -688,7 +688,193 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
                 match res {
                     Ok(ShareValidationResult::Valid(share_hash)) => {
-                        // Extract per-share locking pubkey from SubmitSharesExtended message
+                        // Standard SubmitSharesExtended - no eHash minting
+                        // (eHash minting happens in JDC Mint mode or via SubmitSharesExtendedEHash)
+                        let share_accounting = extended_channel.get_share_accounting();
+                        if share_accounting.should_acknowledge() {
+                            let success = SubmitSharesSuccess {
+                                channel_id,
+                                last_sequence_number: share_accounting.get_last_share_sequence_number(),
+                                new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
+                                new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                            };
+                            info!("SubmitSharesExtended: {} ✅", success);
+                            messages.push((downstream_id, Mining::SubmitSharesSuccess(success)).into());
+                        } else {
+                            let share_work = extended_channel.get_target().difficulty_float();
+                            info!(
+                                "SubmitSharesExtended: valid share | downstream_id: {}, channel_id: {}, sequence_number: {}, share_hash: {}, share_work: {} ✅",
+                                downstream_id, channel_id, msg.sequence_number, share_hash, share_work
+                            );
+                        }
+                    }
+                    Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
+                        info!("SubmitSharesExtended: 💰 Block Found!!! 💰{share_hash}");
+
+                        // Standard SubmitSharesExtended - no eHash minting
+                        // (eHash minting happens in JDC Mint mode or via SubmitSharesExtendedEHash)
+
+                        // if we have a template id (i.e.: this was not a custom job)
+                        // we can propagate the solution to the TP
+                        if let Some(template_id) = template_id {
+                            info!("SubmitSharesExtended: Propagating solution to the Template Provider.");
+                            let solution = SubmitSolution {
+                                template_id,
+                                version: msg.version,
+                                header_timestamp: msg.ntime,
+                                header_nonce: msg.nonce,
+                                coinbase_tx: coinbase.try_into()?,
+                            };
+                            messages.push(TemplateDistribution::SubmitSolution(solution).into());
+                        }
+                        let share_accounting = extended_channel.get_share_accounting();
+                        let success = SubmitSharesSuccess {
+                            channel_id,
+                            last_sequence_number: share_accounting.get_last_share_sequence_number(),
+                            new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
+                            new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesSuccess(success)).into());
+                    }
+                    Err(ShareValidationError::Invalid) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-share ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "invalid-share"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::Stale) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: stale-share ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "stale-share"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::InvalidJobId) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-job-id ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "invalid-job-id"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::DoesNotMeetTarget) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: difficulty-too-low ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "difficulty-too-low"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::DuplicateShare) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: duplicate-share ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "duplicate-share"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(ShareValidationError::BadExtranonceSize) => {
+                        error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: bad-extranonce-size ❌", downstream_id, channel_id, msg.sequence_number);
+                        let error = SubmitSharesError {
+                            channel_id: msg.channel_id,
+                            sequence_number: msg.sequence_number,
+                            error_code: "bad-extranonce-size"
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        messages.push((downstream_id, Mining::SubmitSharesError(error)).into());
+                    }
+                    Err(e) => {
+                        return Err(e)?;
+                    }
+                }
+
+                Ok(messages)
+            })
+        })?;
+
+        for message in messages {
+            message.forward(&self.channel_manager_channel).await;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_submit_shares_extended_ehash(
+        &mut self,
+        client_id: Option<usize>,
+        msg: SubmitSharesExtendedEHash<'_>,
+    ) -> Result<(), Self::Error> {
+        info!("Received SubmitSharesExtendedEHash: {msg}");
+        let downstream_id =
+            client_id.expect("client_id must be present for downstream_id extraction");
+        let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
+            let channel_id = msg.channel_id;
+            let Some(downstream) = channel_manager_data.downstream.get(&downstream_id) else {
+                return Err(PoolError::DownstreamNotFound(downstream_id));
+            };
+
+            downstream.downstream_data.super_safe_lock(|downstream_data| {
+                let mut messages: Vec<RouteMessageTo> = Vec::new();
+                let Some(extended_channel) = downstream_data.extended_channels.get_mut(&channel_id) else {
+                    let error = SubmitSharesError {
+                        channel_id,
+                        sequence_number: msg.sequence_number,
+                        error_code: "invalid-channel-id"
+                            .to_string()
+                            .try_into()
+                            .expect("error code must be valid string"),
+                    };
+                    error!("SubmitSharesError: downstream_id: {}, channel_id: {}, sequence_number: {}, error_code: invalid-channel-id ❌", downstream_id, channel_id, msg.sequence_number);
+                    return Ok(vec![(downstream_id, Mining::SubmitSharesError(error)).into()]);
+                };
+
+                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(downstream_id, channel_id).into()) else {
+                    return Err(PoolError::VardiffNotFound(channel_id));
+                };
+
+                // Convert SubmitSharesExtendedEHash to SubmitSharesExtended for validation
+                // (validation only cares about the share fields, not the eHash locking_pubkey)
+                let share_for_validation = SubmitSharesExtended {
+                    channel_id: msg.channel_id,
+                    sequence_number: msg.sequence_number,
+                    job_id: msg.job_id,
+                    nonce: msg.nonce,
+                    ntime: msg.ntime,
+                    version: msg.version,
+                    extranonce: msg.extranonce.clone(),
+                };
+
+                let res = extended_channel.validate_share(share_for_validation);
+                vardiff.increment_shares_since_last_update();
+
+                match res {
+                    Ok(ShareValidationResult::Valid(share_hash)) => {
+                        // Extract per-share locking pubkey from SubmitSharesExtendedEHash message
                         match super::ChannelManager::extract_pubkey_from_share(&msg) {
                             Ok(locking_pubkey) => {
                                 // Send eHash mint event with per-share pubkey
@@ -724,20 +910,20 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                 new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
                                 new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
                             };
-                            info!("SubmitSharesExtended: {} ✅", success);
+                            info!("SubmitSharesExtendedEHash: {} ✅", success);
                             messages.push((downstream_id, Mining::SubmitSharesSuccess(success)).into());
                         } else {
                             let share_work = extended_channel.get_target().difficulty_float();
                             info!(
-                                "SubmitSharesExtended: valid share | downstream_id: {}, channel_id: {}, sequence_number: {}, share_hash: {}, share_work: {} ✅",
+                                "SubmitSharesExtendedEHash: valid share | downstream_id: {}, channel_id: {}, sequence_number: {}, share_hash: {}, share_work: {} ✅",
                                 downstream_id, channel_id, msg.sequence_number, share_hash, share_work
                             );
                         }
                     }
                     Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
-                        info!("SubmitSharesExtended: 💰 Block Found!!! 💰{share_hash}");
+                        info!("SubmitSharesExtendedEHash: 💰 Block Found!!! 💰{share_hash}");
 
-                        // Extract per-share locking pubkey from SubmitSharesExtended message
+                        // Extract per-share locking pubkey from SubmitSharesExtendedEHash message
                         match super::ChannelManager::extract_pubkey_from_share(&msg) {
                             Ok(locking_pubkey) => {
                                 // Send eHash mint event for block found with per-share pubkey
@@ -768,7 +954,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         // if we have a template id (i.e.: this was not a custom job)
                         // we can propagate the solution to the TP
                         if let Some(template_id) = template_id {
-                            info!("SubmitSharesExtended: Propagating solution to the Template Provider.");
+                            info!("SubmitSharesExtendedEHash: Propagating solution to the Template Provider.");
                             let solution = SubmitSolution {
                                 template_id,
                                 version: msg.version,

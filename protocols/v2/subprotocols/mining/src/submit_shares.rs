@@ -42,8 +42,52 @@ impl fmt::Display for SubmitSharesStandard {
 /// [`SubmitSharesExtended::extranonce`].
 ///
 /// Only relevant for Extended Channels.
+///
+/// **Note**: This is the standard Stratum v2 message without eHash extensions.
+/// For eHash-aware pools, use [`SubmitSharesExtendedEHash`] instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SubmitSharesExtended<'decoder> {
+    /// Channel identification.
+    pub channel_id: u32,
+    /// Unique sequential identifier of the submit within the channel.
+    pub sequence_number: u32,
+    /// Identifier of the job as provided by [`NewMiningJob`] or [`NewExtendedMiningJob`] message.
+    ///
+    /// [`NewMiningJob`]: crate::NewMiningJob
+    /// [`NewExtendedMiningJob`]: crate::NewExtendedMiningJob
+    pub job_id: u32,
+    /// Nonce leading to the hash being submitted.
+    pub nonce: u32,
+    /// The nTime field in the block header. This must be greater than or equal to the
+    /// `header_timestamp` field in the latest [`SetNewPrevHash`] message and lower than or equal
+    /// to that value plus the number of seconds since the receipt of that message.
+    ///
+    /// [`SetNewPrevHash`]: crate::SetNewPrevHash
+    pub ntime: u32,
+    /// Full nVersion field.
+    pub version: u32,
+    /// Extranonce bytes which need to be added to the coinbase tx to form a fully valid submission
+    /// (`full coinbase = coinbase_tx_prefix + extranonce_prefix + extranonce +
+    /// coinbase_tx_suffix`).
+    ///
+    /// The size of the provided extranonce must be equal to the negotiated extranonce size from
+    /// channel opening flow.
+    pub extranonce: B032<'decoder>,
+}
+
+/// Message used by downstream to send result of its hashing work to an eHash-aware upstream.
+///
+/// This is an extension of [`SubmitSharesExtended`] with an additional field for eHash
+/// integration: [`SubmitSharesExtendedEHash::locking_pubkey`].
+///
+/// Only relevant for Extended Channels with eHash support.
+///
+/// **Use Cases**:
+/// - **TProxy**: Always uses this message type to request eHash minting for downstream miners
+/// - **JDC Wallet Mode**: Uses this to forward shares with per-miner locking pubkeys
+/// - **JDC Mint Mode**: Does NOT use this - uses standard [`SubmitSharesExtended`] instead
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SubmitSharesExtendedEHash<'decoder> {
     /// Channel identification.
     pub channel_id: u32,
     /// Unique sequential identifier of the submit within the channel.
@@ -74,7 +118,8 @@ pub struct SubmitSharesExtended<'decoder> {
     ///
     /// Contains a 33-byte compressed secp256k1 public key (0x02 or 0x03 prefix + 32-byte X coordinate)
     /// for Cashu/NUT-20 P2PK authentication. This is a fixed-size field that must always contain
-    /// exactly 33 bytes. Set to all zeros (0x00...00) when not used for eHash minting.
+    /// exactly 33 bytes.
+    ///
     /// This enables per-share authorization control for eHash token minting.
     /// TProxy extracts this from downstream miner's hpub (user_identity) and includes it here.
     pub locking_pubkey: PubKey33<'decoder>,
@@ -85,6 +130,16 @@ impl fmt::Display for SubmitSharesExtended<'_> {
         write!(
             f,
             "SubmitSharesExtended(channel_id={}, sequence_number={}, job_id={}, nonce=0x{:08x}, ntime={}, version=0x{:08x}, extranonce={})",
+            self.channel_id, self.sequence_number, self.job_id, self.nonce, self.ntime, self.version, self.extranonce
+        )
+    }
+}
+
+impl fmt::Display for SubmitSharesExtendedEHash<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SubmitSharesExtendedEHash(channel_id={}, sequence_number={}, job_id={}, nonce=0x{:08x}, ntime={}, version=0x{:08x}, extranonce={}, locking_pubkey=[33 bytes])",
             self.channel_id, self.sequence_number, self.job_id, self.nonce, self.ntime, self.version, self.extranonce
         )
     }

@@ -146,6 +146,20 @@ pub struct ChannelManagerData {
     // Mapping of `(downstream_id, channel_id)` → vardiff controller.
     // Each entry manages variable difficulty for a specific downstream channel.
     vardiff: HashMap<(u32, u32), VardiffState>,
+    // Optional eHash mint sender (for JDC mint mode)
+    // When configured, JDC mints eHash tokens for validated shares
+    mint_sender: Option<async_channel::Sender<ehash_integration::types::EHashMintData>>,
+    // Optional eHash wallet sender (for JDC wallet mode)
+    // When configured, JDC tracks eHash correlation data like TProxy
+    wallet_sender: Option<async_channel::Sender<ehash_integration::types::WalletCorrelationData>>,
+    // JDC's locking pubkey for upstream share submissions
+    // - Mint mode: JDC uses this pubkey when forwarding shares upstream as a normal miner
+    // - Wallet mode: This is used as fallback; per-downstream miner pubkeys preferred
+    jdc_locking_pubkey: Option<stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey>,
+    // Pending wallet correlations: maps (channel_id, upstream_sequence_number) -> (locking_pubkey, timestamp)
+    // Used in Wallet mode to track which locking_pubkey was used for each upstream share
+    // When SubmitSharesSuccess arrives from upstream, we complete the correlation and send to wallet_sender
+    pending_wallet_correlations: std::collections::HashMap<(u32, u32), (stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey, std::time::SystemTime)>,
 }
 
 impl ChannelManagerData {
@@ -302,6 +316,10 @@ impl ChannelManager {
             pending_downstream_requests: VecDeque::new(),
             job_factory: None,
             vardiff: HashMap::new(),
+            mint_sender: None,
+            wallet_sender: None,
+            jdc_locking_pubkey: config.get_parsed_jdc_locking_pubkey(),
+            pending_wallet_correlations: HashMap::new(),
         }));
 
         let channel_manager_channel = ChannelManagerChannel {
@@ -327,6 +345,68 @@ impl ChannelManager {
         };
 
         Ok(channel_manager)
+    }
+
+    /// Sets the mint sender for eHash mint mode operations
+    /// This allows JDC to mint eHash tokens for validated shares
+    pub fn with_mint_sender(
+        &self,
+        mint_sender: async_channel::Sender<ehash_integration::types::EHashMintData>,
+    ) {
+        self.channel_manager_data.safe_lock(|data| {
+            data.mint_sender = Some(mint_sender);
+        });
+    }
+
+    /// Sets the wallet sender for eHash wallet mode operations
+    /// This allows JDC to track eHash correlation data like TProxy
+    pub fn with_wallet_sender(
+        &self,
+        wallet_sender: async_channel::Sender<ehash_integration::types::WalletCorrelationData>,
+    ) {
+        self.channel_manager_data.safe_lock(|data| {
+            data.wallet_sender = Some(wallet_sender);
+        });
+    }
+
+    /// Sends EHashMintData to the mint thread (if configured in mint mode)
+    ///
+    /// This is called after successfully validating a share from a downstream miner.
+    /// The mint thread will calculate the eHash amount and create a PAID quote.
+    pub fn send_mint_data(&self, mint_data: ehash_integration::types::EHashMintData) {
+        self.channel_manager_data.safe_lock(|data| {
+            if let Some(mint_sender) = &data.mint_sender {
+                // Use try_send to avoid blocking - if channel is full, log and continue
+                if let Err(e) = mint_sender.try_send(mint_data) {
+                    warn!("Failed to send EHashMintData to mint thread: {}", e);
+                }
+            }
+        });
+    }
+
+    /// Sends WalletCorrelationData to the wallet thread (if configured in wallet mode)
+    ///
+    /// This is called when tracking share correlation for eHash accounting.
+    pub fn send_wallet_correlation(&self, correlation_data: ehash_integration::types::WalletCorrelationData) {
+        self.channel_manager_data.safe_lock(|data| {
+            if let Some(wallet_sender) = &data.wallet_sender {
+                // Use try_send to avoid blocking - if channel is full, log and continue
+                if let Err(e) = wallet_sender.try_send(correlation_data) {
+                    warn!("Failed to send WalletCorrelationData to wallet thread: {}", e);
+                }
+            }
+        });
+    }
+
+    /// Returns the JDC's locking pubkey (if configured)
+    ///
+    /// This pubkey is used when forwarding shares upstream:
+    /// - Mint mode: JDC uses this pubkey (acting as a normal miner)
+    /// - Wallet mode: This is used as fallback; per-downstream miner pubkeys preferred
+    pub fn get_jdc_locking_pubkey(&self) -> Option<stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey> {
+        self.channel_manager_data
+            .safe_lock(|data| data.jdc_locking_pubkey)
+            .expect("Failed to acquire lock on channel_manager_data")
     }
 
     /// Starts the downstream server, and accepts new connection request.

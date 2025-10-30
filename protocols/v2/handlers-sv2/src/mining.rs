@@ -580,6 +580,12 @@ pub trait HandleMiningMessagesFromClientSync {
         msg: SubmitSharesExtended,
     ) -> Result<(), Self::Error>;
 
+    fn handle_submit_shares_extended_ehash(
+        &mut self,
+        client_id: Option<usize>,
+        msg: SubmitSharesExtendedEHash,
+    ) -> Result<(), Self::Error>;
+
     fn handle_set_custom_mining_job(
         &mut self,
         client_id: Option<usize>,
@@ -723,6 +729,12 @@ pub trait HandleMiningMessagesFromClientAsync {
         &mut self,
         client_id: Option<usize>,
         msg: SubmitSharesExtended,
+    ) -> Result<(), Self::Error>;
+
+    async fn handle_submit_shares_extended_ehash(
+        &mut self,
+        client_id: Option<usize>,
+        msg: SubmitSharesExtendedEHash,
     ) -> Result<(), Self::Error>;
 
     async fn handle_set_custom_mining_job(

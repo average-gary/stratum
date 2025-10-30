@@ -387,33 +387,74 @@ This document breaks down the eHash persistence implementation into small, focus
 
 ## Phase 7: JDC Role Integration
 
+### JDC eHash Mode Overview
+
+The JDC (Job Declarator Client) can operate in two distinct eHash modes:
+
+#### **Mint Mode** (JDC as Terminal Mint)
+- **Purpose**: JDC operates as a standalone mining pool with eHash minting capability
+- **Behavior**:
+  - JDC mints eHash tokens **locally** for its downstream miners based on share validation
+  - JDC forwards shares **upstream to Pool as a normal miner** using standard SubmitSharesExtended
+  - JDC uses its **own locking_pubkey** (from config, hpub format) when forwarding shares upstream
+  - Upstream Pool treats JDC like any other miner - it doesn't need to know about JDC's local eHash minting
+  - Downstream miners receive eHash tokens from JDC's local mint
+- **Use Case**: Small pool operator wants to run their own eHash mint for their miners
+
+#### **Wallet Mode** (JDC as Proxy/Translator)
+- **Purpose**: JDC acts like TProxy - forwards eHash data upstream for minting
+- **Behavior**:
+  - JDC **does NOT mint locally** - it tracks correlation data only
+  - JDC forwards shares upstream with **per-downstream-miner locking_pubkeys** (Phase 8 enhancement)
+  - Currently uses JDC's own locking_pubkey as fallback until Phase 8 per-miner extraction
+  - Upstream Pool mints the eHash tokens, JDC's wallet tracks correlation for accounting
+  - Downstream miners must redeem eHash from upstream mint (external wallets)
+- **Use Case**: Large proxy operator wants to participate in pool's eHash system without running their own mint
+
 ### 7.1 Add JdcEHashConfig to JDC TOML config
-- [ ] Add JdcEHashConfig with mode enum and optional mint/wallet configs
-- [ ] Add deserialization support
-- [ ] Document configuration options
+- [x] Add JdcEHashConfig with mode enum and optional mint/wallet configs
+- [x] Add deserialization support
+- [x] Add ehash-integration dependency to jd-client Cargo.toml
+- [x] Add optional ehash_config field to JobDeclaratorClientConfig
+- [x] Add ehash_config() getter and validate_ehash_config() methods
+- [x] Add jdc_locking_pubkey field (hpub format) to config
+- [x] Implement hpub parsing for JDC's locking pubkey
+- [x] Store parsed pubkey in ChannelManager for share submissions
+- [x] Document configuration options
+- [x] Create example config files (mint mode and wallet mode with hpub examples)
+- [x] Add configuration validation tests
 - **Requirements**: 5.3, 5.4
-- **Files**: `roles/jd-client/src/lib.rs`, example config files
+- **Files**: `roles/jd-client/src/lib/config.rs`, `roles/jd-client/src/lib/channel_manager/mod.rs`, `roles/jd-client/config-examples/jdc-config-local-ehash-{mint,wallet}-example.toml`, `roles/jd-client/Cargo.toml`
+- **Note**: Configuration complete. JDC uses hpub format for locking_pubkey (consistent with TProxy/Pool). Proper pubkey handling implemented for both Mint and Wallet modes.
 
 ### 7.2 Add JDC mint mode support
-- [ ] Add mint thread spawning when mode=Mint
-- [ ] Hook share validation to create mint events
-- [ ] Integrate mint_sender into JDC ChannelManager
+- [x] Add mint thread spawning when mode=Mint
+- [x] Hook share validation to create mint events (send_mint_data method added)
+- [x] Integrate mint_sender into JDC ChannelManager
+- [x] Add spawn_mint_thread helper function
+- [x] Use JDC's configured locking_pubkey when forwarding shares upstream
 - **Requirements**: 7.4
-- **Files**: `roles/jd-client/src/lib.rs`
+- **Files**: `roles/jd-client/src/lib/mod.rs`, `roles/jd-client/src/lib/channel_manager/mod.rs`, `roles/jd-client/src/lib/channel_manager/downstream_message_handler.rs`
+- **Note**: Mint mode complete. JDC mints eHash locally and forwards shares upstream as a normal miner using its own locking_pubkey.
 
 ### 7.3 Add JDC wallet mode support
-- [ ] Add wallet thread spawning when mode=Wallet
-- [ ] Hook SubmitSharesSuccess to create correlation events
-- [ ] Integrate wallet_sender into JDC context
+- [x] Add wallet thread spawning when mode=Wallet
+- [x] Hook for correlation events (send_wallet_correlation method added)
+- [x] Integrate wallet_sender into JDC ChannelManager
+- [x] Add spawn_wallet_thread helper function
+- [x] Use JDC's locking_pubkey as fallback for upstream shares
+- [ ] Phase 8 enhancement: Extract and use per-downstream-miner locking_pubkeys
 - **Requirements**: 7.5
-- **Files**: `roles/jd-client/src/lib.rs`
+- **Files**: `roles/jd-client/src/lib/mod.rs`, `roles/jd-client/src/lib/channel_manager/mod.rs`, `roles/jd-client/src/lib/channel_manager/downstream_message_handler.rs`
+- **Note**: Wallet mode infrastructure complete. Currently uses JDC's own locking_pubkey as fallback. Per-miner pubkey extraction to be added in Phase 8.
 
 ### 7.4 Add JDC integration tests
-- [ ] Test JDC mint mode configuration and operation
-- [ ] Test JDC wallet mode configuration and operation
-- [ ] Test configuration validation
+- [ ] Test JDC mint mode configuration and operation (deferred to Phase 10)
+- [ ] Test JDC wallet mode configuration and operation (deferred to Phase 10)
+- [x] Test configuration validation (completed in Task 7.1)
 - **Requirements**: 7.1, 7.2, 5.6
-- **Files**: JDC integration tests
+- **Files**: `roles/jd-client/src/lib/config.rs` (tests section)
+- **Note**: Configuration tests complete. End-to-end integration tests deferred to Phase 10.
 
 ## Phase 8: Per-Share NUT-20 P2PK Protocol Implementation
 

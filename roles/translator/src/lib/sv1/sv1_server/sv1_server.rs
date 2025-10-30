@@ -402,7 +402,7 @@ impl Sv1Server {
 
         self.sv1_server_channel_state
             .channel_manager_sender
-            .send(Mining::SubmitSharesExtended(submit_share_extended))
+            .send(Mining::SubmitSharesExtendedEHash(submit_share_extended))
             .await
             .map_err(|_| TproxyError::ChannelErrorSender)?;
 

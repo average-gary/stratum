@@ -549,7 +549,7 @@ impl ChannelManager {
     /// - locking_pubkey is always 33 bytes (PubKey33 fixed-size type)
     /// - Pubkey bytes must form a valid secp256k1 compressed public key
     pub fn extract_pubkey_from_share(
-        msg: &stratum_apps::stratum_core::mining_sv2::SubmitSharesExtended,
+        msg: &stratum_apps::stratum_core::mining_sv2::SubmitSharesExtendedEHash,
     ) -> Result<bitcoin::secp256k1::PublicKey, PoolError> {
         use bitcoin::secp256k1::PublicKey;
 
@@ -559,7 +559,7 @@ impl ChannelManager {
         // Check if all zeros (indicates locking_pubkey not set for eHash)
         if pubkey_bytes.iter().all(|&b| b == 0) {
             return Err(PoolError::Custom(
-                "Locking pubkey not set (all zeros) in SubmitSharesExtended".to_string(),
+                "Locking pubkey not set (all zeros) in SubmitSharesExtendedEHash".to_string(),
             ));
         }
 

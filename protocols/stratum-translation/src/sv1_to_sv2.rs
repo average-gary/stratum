@@ -1,6 +1,6 @@
 use crate::error::{Result, StratumTranslationError};
 use bitcoin::{secp256k1::PublicKey, Target};
-use mining_sv2::{OpenExtendedMiningChannel, SubmitSharesExtended};
+use mining_sv2::{OpenExtendedMiningChannel, SubmitSharesExtendedEHash};
 use v1::{client_to_server, utils::HexU32Be};
 
 /// Builds an SV2 `OpenExtendedMiningChannel` message from the provided inputs.
@@ -34,7 +34,7 @@ pub fn build_sv2_open_extended_mining_channel(
     })
 }
 
-/// Builds an SV2 `SubmitSharesExtended` from an SV1 `mining.submit`.
+/// Builds an SV2 `SubmitSharesExtendedEHash` from an SV1 `mining.submit`.
 ///
 /// # Arguments
 /// * `submit` - Reference to the SV1 `mining.submit` message to convert.
@@ -45,10 +45,9 @@ pub fn build_sv2_open_extended_mining_channel(
 ///   field.
 /// * `locking_pubkey` - Secp256k1 public key for eHash minting.
 ///   This should always be provided (either from miner's username or from config default).
-///   Null pubkey (02 + 32 zeros) indicates no eHash support for this share.
 ///
 /// # Returns
-/// * `Ok(SubmitSharesExtended)` if the conversion is successful.
+/// * `Ok(SubmitSharesExtendedEHash)` if the conversion is successful.
 /// * `Err(())` if any required field is missing or conversion fails.
 pub fn build_sv2_submit_shares_extended_from_sv1_submit(
     submit: &client_to_server::Submit<'_>,
@@ -57,7 +56,7 @@ pub fn build_sv2_submit_shares_extended_from_sv1_submit(
     job_version: u32,
     version_rolling_mask: Option<HexU32Be>,
     locking_pubkey: PublicKey,
-) -> Result<SubmitSharesExtended<'static>> {
+) -> Result<SubmitSharesExtendedEHash<'static>> {
     let version = match (submit.version_bits.clone(), version_rolling_mask) {
         (Some(version_bits), Some(rolling_mask)) => {
             (job_version & !rolling_mask.0) | (version_bits.0 & rolling_mask.0)
@@ -67,7 +66,7 @@ pub fn build_sv2_submit_shares_extended_from_sv1_submit(
     };
 
     let extranonce: Vec<u8> = submit.extra_nonce2.clone().into();
-    let submit_share_extended = SubmitSharesExtended {
+    let submit_share_extended_ehash = SubmitSharesExtendedEHash {
         channel_id,
         sequence_number,
         job_id: submit
@@ -86,7 +85,7 @@ pub fn build_sv2_submit_shares_extended_from_sv1_submit(
             .try_into()
             .map_err(|_| StratumTranslationError::InvalidExtranonceLength)?,
     };
-    Ok(submit_share_extended)
+    Ok(submit_share_extended_ehash)
 }
 
 #[cfg(test)]

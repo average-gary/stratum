@@ -105,6 +105,58 @@ impl JobDeclaratorClient {
         .await
         .unwrap();
 
+        // Initialize eHash integration if configured
+        if let Some(ehash_config) = self.config.ehash_config() {
+            match ehash_config.mode {
+                ehash_integration::config::JdcEHashMode::Mint => {
+                    if let Some(mint_config) = &ehash_config.mint {
+                        info!("JDC eHash mint mode enabled");
+                        match spawn_mint_thread(
+                            task_manager.clone(),
+                            mint_config.clone(),
+                            notify_shutdown.subscribe(),
+                        )
+                        .await
+                        {
+                            Ok(mint_sender) => {
+                                channel_manager.with_mint_sender(mint_sender);
+                                info!("Mint handler initialized successfully");
+                            }
+                            Err(e) => {
+                                warn!("Failed to initialize mint handler: {:?}", e);
+                            }
+                        }
+                    } else {
+                        warn!("JDC eHash mint mode configured but no mint configuration provided");
+                    }
+                }
+                ehash_integration::config::JdcEHashMode::Wallet => {
+                    if let Some(wallet_config) = &ehash_config.wallet {
+                        info!("JDC eHash wallet mode enabled");
+                        match spawn_wallet_thread(
+                            task_manager.clone(),
+                            wallet_config.clone(),
+                            notify_shutdown.subscribe(),
+                        )
+                        .await
+                        {
+                            Ok(wallet_sender) => {
+                                channel_manager.with_wallet_sender(wallet_sender);
+                                info!("Wallet handler initialized successfully");
+                            }
+                            Err(e) => {
+                                warn!("Failed to initialize wallet handler: {:?}", e);
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "JDC eHash wallet mode configured but no wallet configuration provided"
+                        );
+                    }
+                }
+            }
+        }
+
         let channel_manager_clone = channel_manager.clone();
 
         // Initialize the template Receiver
@@ -470,4 +522,99 @@ impl Drop for JobDeclaratorClient {
         info!("JobDeclaratorClient dropped");
         let _ = self.notify_shutdown.send(ShutdownMessage::ShutdownAll);
     }
+}
+
+/// Spawns a mint thread for eHash token minting
+///
+/// Creates a MintHandler instance and spawns it as a dedicated async task managed by
+/// the TaskManager. The mint thread runs independently of JDC operations and
+/// processes EHashMintData events sent via the returned async channel.
+///
+/// # Arguments
+/// * `task_manager` - TaskManager to register the mint thread with
+/// * `config` - MintConfig containing mint settings
+/// * `shutdown_rx` - Shutdown signal receiver for graceful shutdown
+///
+/// # Returns
+/// Returns the sender channel for EHashMintData events on success
+pub async fn spawn_mint_thread(
+    task_manager: Arc<TaskManager>,
+    config: ehash_integration::config::MintConfig,
+    mut shutdown_rx: broadcast::Receiver<ShutdownMessage>,
+) -> Result<async_channel::Sender<ehash_integration::types::EHashMintData>, JDCError> {
+    info!("Initializing eHash mint handler...");
+
+    let mut mint_handler = ehash_integration::mint::MintHandler::new(config).await.map_err(|e| {
+        JDCError::Custom(format!("Failed to initialize mint handler: {}", e))
+    })?;
+
+    let sender = mint_handler.get_sender();
+
+    // Create an async_channel for shutdown signal conversion
+    let (shutdown_tx, shutdown_rx_async) = async_channel::bounded::<()>(1);
+
+    // Spawn a task to convert broadcast shutdown to async_channel
+    task_manager.spawn(async move {
+        if shutdown_rx.recv().await.is_ok() {
+            let _ = shutdown_tx.send(()).await;
+        }
+    });
+
+    info!("Spawning mint handler task...");
+    task_manager.spawn(async move {
+        if let Err(e) = mint_handler.run_with_shutdown(shutdown_rx_async).await {
+            warn!("Mint handler error: {}", e);
+        }
+        info!("Mint handler task completed");
+    });
+
+    Ok(sender)
+}
+
+/// Spawns a wallet thread for eHash correlation tracking
+///
+/// Creates a WalletHandler instance and spawns it as a dedicated async task managed by
+/// the TaskManager. The wallet thread runs independently of JDC operations and
+/// processes WalletCorrelationData events sent via the returned async channel.
+///
+/// # Arguments
+/// * `task_manager` - TaskManager to register the wallet thread with
+/// * `config` - WalletConfig containing wallet settings
+/// * `shutdown_rx` - Shutdown signal receiver for graceful shutdown
+///
+/// # Returns
+/// Returns the sender channel for WalletCorrelationData events on success
+pub async fn spawn_wallet_thread(
+    task_manager: Arc<TaskManager>,
+    config: ehash_integration::config::WalletConfig,
+    mut shutdown_rx: broadcast::Receiver<ShutdownMessage>,
+) -> Result<async_channel::Sender<ehash_integration::types::WalletCorrelationData>, JDCError> {
+    info!("Initializing eHash wallet handler...");
+
+    let mut wallet_handler =
+        ehash_integration::wallet::WalletHandler::new(config).await.map_err(|e| {
+            JDCError::Custom(format!("Failed to initialize wallet handler: {}", e))
+        })?;
+
+    let sender = wallet_handler.get_sender();
+
+    // Create an async_channel for shutdown signal conversion
+    let (shutdown_tx, shutdown_rx_async) = async_channel::bounded::<()>(1);
+
+    // Spawn a task to convert broadcast shutdown to async_channel
+    task_manager.spawn(async move {
+        if shutdown_rx.recv().await.is_ok() {
+            let _ = shutdown_tx.send(()).await;
+        }
+    });
+
+    info!("Spawning wallet handler task...");
+    task_manager.spawn(async move {
+        if let Err(e) = wallet_handler.run_with_shutdown(shutdown_rx_async).await {
+            warn!("Wallet handler error: {}", e);
+        }
+        info!("Wallet handler task completed");
+    });
+
+    Ok(sender)
 }

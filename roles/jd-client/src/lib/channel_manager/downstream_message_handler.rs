@@ -31,6 +31,34 @@ use crate::{
     utils::StdFrame,
 };
 
+/// Extracts hpub-encoded locking pubkey from user_identity string.
+///
+/// Supports the format: `hpub.worker-name`
+/// - The hpub is the FIRST part before the period
+/// - Everything after the period is the worker name
+///
+/// Examples:
+/// - Direct hpub: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw"
+/// - With worker name: "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw.worker1"
+///
+/// # Arguments
+/// * `user_identity` - The user_identity string from the channel
+///
+/// # Returns
+/// * `Some(hpub_str)` - The extracted hpub string if found
+/// * `None` - If no hpub found in user_identity
+fn extract_hpub_from_user_identity(user_identity: &str) -> Option<String> {
+    // Split by period and get the first part
+    let first_part = user_identity.split('.').next()?;
+
+    // Check if the first part is a valid hpub (starts with "hpub1")
+    if first_part.starts_with("hpub1") {
+        Some(first_part.to_string())
+    } else {
+        None
+    }
+}
+
 /// `RouteMessageTo` is an abstraction used to route protocol messages
 /// to the appropriate subsystem connected to the JDC.
 ///
@@ -1037,59 +1065,222 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     let up_prefix = upstream_channel.get_extranonce_prefix();
                     extranonce_parts.extend_from_slice(&prefix[up_prefix.len()..]);
 
+                    // Determine message type based on eHash mode
+                    // - Mint mode (mint_sender present): Use standard SubmitSharesExtended (no eHash request)
+                    // - Wallet mode (wallet_sender present): Use SubmitSharesExtendedEHash (request eHash)
+                    // - No eHash: Use standard SubmitSharesExtended
+                    let is_wallet_mode = channel_manager_data.wallet_sender.is_some();
+
+                    // In Wallet mode, locking_pubkey MUST be configured
+                    if is_wallet_mode && channel_manager_data.jdc_locking_pubkey.is_none() {
+                        error!("JDC Wallet mode requires jdc_locking_pubkey to be configured");
+                        return Err(JDCError::Custom(
+                            "JDC Wallet mode: jdc_locking_pubkey not configured".to_string()
+                        ));
+                    }
+
+                    // Helper enum to handle both message types
+                    enum UpstreamShare<'a> {
+                        Standard(SubmitSharesExtended<'a>),
+                        EHash(SubmitSharesExtendedEHash<'a>),
+                    }
+
                     let upstream_message = channel_manager_data
                     .downstream_channel_id_and_job_id_to_template_id
                     .get(&(channel_id, job_id))
                     .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
                     .map(|&upstream_job_id| {
-                        SubmitSharesExtended {
-                            channel_id: upstream_channel.get_channel_id(),
-                            job_id: upstream_job_id as u32,
-                            extranonce: extranonce_parts.try_into().unwrap(),
-                            nonce: msg.nonce,
-                            ntime: msg.ntime,
-                            // We assign sequence number later, when we validate the share
-                            // and send it to upstream.
-                            sequence_number: 0,
-                            version: msg.version,
+                        if is_wallet_mode {
+                            // Wallet mode: Create SubmitSharesExtendedEHash with locking_pubkey
+                            // Priority order:
+                            // 1. Try to extract hpub from user_identity
+                            // 2. Fall back to jdc_locking_pubkey (already validated as Some)
+
+                            let user_identity = standard_channel.get_user_identity();
+                            let locking_pubkey = if let Some(hpub_str) = extract_hpub_from_user_identity(user_identity) {
+                                // Try to parse the extracted hpub
+                                match ehash_integration::hpub::parse_hpub(&hpub_str) {
+                                    Ok(pubkey) => {
+                                        debug!(
+                                            "Using locking_pubkey from user_identity for channel {}: {}",
+                                            channel_id, hpub_str
+                                        );
+                                        pubkey
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to parse hpub '{}' from user_identity: {:?}, using jdc_locking_pubkey",
+                                            hpub_str, e
+                                        );
+                                        channel_manager_data.jdc_locking_pubkey.unwrap()
+                                    }
+                                }
+                            } else {
+                                // No hpub in user_identity, use configured default
+                                debug!(
+                                    "No hpub in user_identity for channel {}, using jdc_locking_pubkey",
+                                    channel_id
+                                );
+                                channel_manager_data.jdc_locking_pubkey.unwrap()
+                            };
+
+                            let locking_pubkey_bytes = locking_pubkey.serialize();
+                            let locking_pubkey = locking_pubkey_bytes.to_vec().try_into().expect("33 bytes");
+
+                            UpstreamShare::EHash(SubmitSharesExtendedEHash {
+                                channel_id: upstream_channel.get_channel_id(),
+                                job_id: upstream_job_id as u32,
+                                extranonce: extranonce_parts.clone().try_into().unwrap(),
+                                nonce: msg.nonce,
+                                ntime: msg.ntime,
+                                // We assign sequence number later, when we validate the share
+                                // and send it to upstream.
+                                sequence_number: 0,
+                                version: msg.version,
+                                locking_pubkey,
+                            })
+                        } else {
+                            // Mint mode or no eHash: Create standard SubmitSharesExtended (no locking_pubkey)
+                            UpstreamShare::Standard(SubmitSharesExtended {
+                                channel_id: upstream_channel.get_channel_id(),
+                                job_id: upstream_job_id as u32,
+                                extranonce: extranonce_parts.clone().try_into().unwrap(),
+                                nonce: msg.nonce,
+                                ntime: msg.ntime,
+                                sequence_number: 0,
+                                version: msg.version,
+                            })
                         }
                     });
 
-                    if let Some(mut upstream_message) = upstream_message {
-                        let res = upstream_channel.validate_share(upstream_message.clone());
-                        match res {
-                            Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!(
-                                    "SubmitSharesStandard, forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
-                                    channel_id, upstream_message.sequence_number, share_hash
-                                );
-                                messages.push(Mining::SubmitSharesExtended(upstream_message).into());
+                    if let Some(upstream_message) = upstream_message {
+                        match upstream_message {
+                            UpstreamShare::Standard(mut share) => {
+                                let res = upstream_channel.validate_share(share.clone());
+                                match res {
+                                    Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+                                        share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                        info!(
+                                            "SubmitSharesStandard, forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
+                                            channel_id, share.sequence_number, share_hash
+                                        );
+                                        messages.push(Mining::SubmitSharesExtended(share).into());
+                                    }
+                                    Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+                                        share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                        info!("SubmitSharesStandard forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
+                                        let push_solution = PushSolution {
+                                            extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into()?,
+                                            ntime: share.ntime,
+                                            nonce: share.nonce,
+                                            version: share.version,
+                                            nbits: prev_hash.n_bits,
+                                            prev_hash: prev_hash.prev_hash.clone(),
+                                        };
+                                        messages.push(JobDeclaration::PushSolution(push_solution).into());
+                                        messages.push(Mining::SubmitSharesExtended(share).into());
+                                    }
+                                    Err(err) => {
+                                        let code = match err {
+                                            client::share_accounting::ShareValidationError::Invalid => "invalid-share",
+                                            client::share_accounting::ShareValidationError::Stale => "stale-share",
+                                            client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
+                                            client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
+                                            client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                                            _ => unreachable!(),
+                                        };
+                                        debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, share.sequence_number);
+                                    }
+                                }
                             }
-                            Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
-                                upstream_message.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
-                                info!("SubmitSharesStandard forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
-                                let push_solution = PushSolution {
-                                    extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into()?,
-                                    ntime: upstream_message.ntime,
-                                    nonce: upstream_message.nonce,
-                                    version: upstream_message.version,
-                                    nbits: prev_hash.n_bits,
-                                    prev_hash: prev_hash.prev_hash.clone(),
+                            UpstreamShare::EHash(mut share) => {
+                                // Convert to standard type for validation
+                                let share_for_validation = SubmitSharesExtended {
+                                    channel_id: share.channel_id,
+                                    sequence_number: share.sequence_number,
+                                    job_id: share.job_id,
+                                    nonce: share.nonce,
+                                    ntime: share.ntime,
+                                    version: share.version,
+                                    extranonce: share.extranonce.clone(),
                                 };
-                                messages.push(JobDeclaration::PushSolution(push_solution).into());
-                                messages.push(Mining::SubmitSharesExtended(upstream_message).into());
-                            }
-                            Err(err) => {
-                                let code = match err {
-                                    client::share_accounting::ShareValidationError::Invalid => "invalid-share",
-                                    client::share_accounting::ShareValidationError::Stale => "stale-share",
-                                    client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
-                                    client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
-                                    client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
-                                    _ => unreachable!(),
-                                };
-                                debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                                let res = upstream_channel.validate_share(share_for_validation);
+                                match res {
+                                    Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+                                        share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                        info!(
+                                            "SubmitSharesExtendedEHash, forwarding it to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
+                                            channel_id, share.sequence_number, share_hash
+                                        );
+
+                                        // Wallet mode: Store pending correlation
+                                        // Extract locking_pubkey from share and store with timestamp
+                                        // When SubmitSharesSuccess arrives from upstream, we'll complete the correlation
+                                        let locking_pubkey_bytes: &[u8] = share.locking_pubkey.inner_as_ref();
+                                        if let Ok(locking_pubkey) = stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey::from_slice(locking_pubkey_bytes) {
+                                            channel_manager_data.pending_wallet_correlations.insert(
+                                                (upstream_channel.get_channel_id(), share.sequence_number),
+                                                (locking_pubkey, std::time::SystemTime::now())
+                                            );
+                                            debug!(
+                                                "Stored pending wallet correlation: upstream_channel={}, seq={}, pubkey_len={}",
+                                                upstream_channel.get_channel_id(), share.sequence_number, locking_pubkey_bytes.len()
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Failed to parse locking_pubkey from share for wallet correlation: upstream_channel={}, seq={}",
+                                                upstream_channel.get_channel_id(), share.sequence_number
+                                            );
+                                        }
+
+                                        messages.push(Mining::SubmitSharesExtendedEHash(share).into());
+                                    }
+                                    Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+                                        share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                        info!("SubmitSharesExtendedEHash forwarding it to upstream: 💰 Block Found!!! 💰{share_hash}");
+
+                                        // Wallet mode: Store pending correlation (same as Valid case)
+                                        // Extract locking_pubkey from share and store with timestamp
+                                        let locking_pubkey_bytes: &[u8] = share.locking_pubkey.inner_as_ref();
+                                        if let Ok(locking_pubkey) = stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey::from_slice(locking_pubkey_bytes) {
+                                            channel_manager_data.pending_wallet_correlations.insert(
+                                                (upstream_channel.get_channel_id(), share.sequence_number),
+                                                (locking_pubkey, std::time::SystemTime::now())
+                                            );
+                                            debug!(
+                                                "Stored pending wallet correlation (block found): upstream_channel={}, seq={}, pubkey_len={}",
+                                                upstream_channel.get_channel_id(), share.sequence_number, locking_pubkey_bytes.len()
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Failed to parse locking_pubkey from share for wallet correlation (block found): upstream_channel={}, seq={}",
+                                                upstream_channel.get_channel_id(), share.sequence_number
+                                            );
+                                        }
+
+                                        let push_solution = PushSolution {
+                                            extranonce: standard_channel.get_extranonce_prefix().to_vec().try_into()?,
+                                            ntime: share.ntime,
+                                            nonce: share.nonce,
+                                            version: share.version,
+                                            nbits: prev_hash.n_bits,
+                                            prev_hash: prev_hash.prev_hash.clone(),
+                                        };
+                                        messages.push(JobDeclaration::PushSolution(push_solution).into());
+                                        messages.push(Mining::SubmitSharesExtendedEHash(share).into());
+                                    }
+                                    Err(err) => {
+                                        let code = match err {
+                                            client::share_accounting::ShareValidationError::Invalid => "invalid-share",
+                                            client::share_accounting::ShareValidationError::Stale => "stale-share",
+                                            client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
+                                            client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
+                                            client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                                            _ => unreachable!(),
+                                        };
+                                        debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, share.sequence_number);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1180,6 +1371,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             );
                         }
                         is_downstream_share_valid = true;
+
+                        // Note: Wallet correlation tracking is handled during upstream share forwarding
+                        // in the UpstreamShare::EHash validation success branches above
                     }
                     Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
                         info!("SubmitSharesExtended on downstream channel: 💰 Block Found!!! 💰{share_hash}");
@@ -1206,6 +1400,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             downstream.downstream_id,
                             Mining::SubmitSharesSuccess(success),
                         ).into());
+
+                        // Note: Wallet correlation tracking is handled during upstream share forwarding
+                        // in the UpstreamShare::EHash validation success branches above
                     }
                     Err(err) => {
                         let code = match err {
@@ -1287,6 +1484,299 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                     _ => unreachable!(),
                                 };
                                 debug!("❌ SubmitSharesError not forwarding it to upstream: ch={}, seq={}, error={code}", channel_id, upstream_message.sequence_number);
+                            }
+                        }
+                    }
+                }
+
+                Ok(messages)
+            })
+        })?;
+
+        for messages in messages {
+            messages.forward(&self.channel_manager_channel).await;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_submit_shares_extended_ehash(
+        &mut self,
+        _client_id: Option<usize>,
+        msg: SubmitSharesExtendedEHash<'_>,
+    ) -> Result<(), Self::Error> {
+        info!("Received SubmitSharesExtendedEHash");
+
+        // SubmitSharesExtendedEHash from downstream is ONLY expected in Mint mode
+        // In Wallet mode, downstream should send standard SubmitSharesExtended
+        let is_mint_mode = self.channel_manager_data.super_safe_lock(|data| {
+            data.mint_sender.is_some()
+        });
+
+        if !is_mint_mode {
+            warn!("Received SubmitSharesExtendedEHash but JDC is not in Mint mode - rejecting");
+            return Err(Self::Error::UnexpectedMessage(
+                MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH,
+            ));
+        }
+
+        let channel_id = msg.channel_id;
+        let job_id = msg.job_id;
+
+        let build_error = |code: &str| {
+            Mining::SubmitSharesError(SubmitSharesError {
+                channel_id,
+                sequence_number: msg.sequence_number,
+                error_code: code.to_string().try_into().expect("valid error code"),
+            })
+        };
+
+        // Convert to standard for validation
+        let msg_for_validation = SubmitSharesExtended {
+            channel_id: msg.channel_id,
+            sequence_number: msg.sequence_number,
+            job_id: msg.job_id,
+            nonce: msg.nonce,
+            ntime: msg.ntime,
+            version: msg.version,
+            extranonce: msg.extranonce.clone(),
+        };
+
+        let messages = self.channel_manager_data.super_safe_lock(|channel_manager_data| {
+            let Some(downstream_id) = channel_manager_data.channel_id_to_downstream_id.get(&channel_id) else {
+                warn!("No downstream_id found for channel_id={channel_id}");
+                return Err(JDCError::DownstreamNotFoundWithChannelId(channel_id));
+            };
+            let Some(downstream) = channel_manager_data.downstream.get_mut(downstream_id) else {
+                warn!("No downstream found for downstream_id={downstream_id}");
+                return Err(JDCError::DownstreamNotFound(*downstream_id));
+            };
+            let Some(prev_hash) = channel_manager_data.last_new_prev_hash.as_ref() else {
+                warn!("No prev_hash available yet, ignoring share");
+                return Err(JDCError::LastNewPrevhashNotFound);
+            };
+            downstream.downstream_data.super_safe_lock(|data| {
+                let mut messages: Vec<RouteMessageTo> = vec![];
+
+                let Some(extended_channel) = data.extended_channels.get_mut(&channel_id) else {
+                    error!("SubmitSharesError: channel_id: {channel_id}, sequence_number: {}, error_code: invalid-channel-id", msg.sequence_number);
+                    return Ok(vec![(*downstream_id, build_error("invalid-channel-id")).into()]);
+                };
+
+                let Some(vardiff) = channel_manager_data.vardiff.get_mut(&(channel_id, *downstream_id)) else {
+                    return Err(JDCError::VardiffNotFound(channel_id));
+                };
+                vardiff.increment_shares_since_last_update();
+                let res = extended_channel.validate_share(msg_for_validation.clone());
+                let mut is_downstream_share_valid = false;
+
+                match res {
+                    Ok(ShareValidationResult::Valid(share_hash)) => {
+                        let share_accounting = extended_channel.get_share_accounting();
+                        if share_accounting.should_acknowledge() {
+                            let success = SubmitSharesSuccess {
+                                channel_id,
+                                last_sequence_number: share_accounting.get_last_share_sequence_number(),
+                                new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
+                                new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                            };
+                            info!("SubmitSharesExtendedEHash on downstream channel: {} ✅", success);
+                            messages.push((downstream.downstream_id, Mining::SubmitSharesSuccess(success)).into());
+                        } else {
+                            info!(
+                                "SubmitSharesExtendedEHash on downstream channel: valid share | channel_id: {}, sequence_number: {}, share_hash: {} ☑️",
+                                channel_id, msg.sequence_number, share_hash
+                            );
+                        }
+                        is_downstream_share_valid = true;
+
+                        // Mint Mode: Send mint data to mint_sender
+                        // Extract locking_pubkey from msg and create EHashMintData
+                        let locking_pubkey_bytes: &[u8] = msg.locking_pubkey.inner_as_ref();
+                        if let Ok(locking_pubkey) = stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey::from_slice(locking_pubkey_bytes) {
+                            let user_identity = extended_channel.get_user_identity();
+
+                            let mint_data = ehash_integration::types::EHashMintData {
+                                share_hash: share_hash,
+                                block_found: false,
+                                channel_id,
+                                user_identity: user_identity.clone(),
+                                target: *extended_channel.get_target(),
+                                sequence_number: msg.sequence_number,
+                                timestamp: std::time::SystemTime::now(),
+                                template_id: None,
+                                coinbase: None,
+                                locking_pubkey,
+                            };
+
+                            // Send directly to mint_sender
+                            if let Some(mint_sender) = &channel_manager_data.mint_sender {
+                                if let Err(e) = mint_sender.try_send(mint_data) {
+                                    warn!("Failed to send EHashMintData to mint thread: {}", e);
+                                } else {
+                                    debug!(
+                                        "Sent EHashMintData to mint thread: channel={}, seq={}",
+                                        channel_id, msg.sequence_number
+                                    );
+                                }
+                            }
+                        } else {
+                            warn!(
+                                "Failed to parse locking_pubkey from SubmitSharesExtendedEHash: channel={}, seq={}",
+                                channel_id, msg.sequence_number
+                            );
+                        }
+                    }
+                    Ok(ShareValidationResult::BlockFound(share_hash, template_id, coinbase)) => {
+                        info!("SubmitSharesExtendedEHash on downstream channel: 💰 Block Found!!! 💰{share_hash}");
+
+                        // Clone coinbase for later use in mint data
+                        let coinbase_for_mint = coinbase.clone();
+
+                        if let Some(template_id) = template_id {
+                            info!("SubmitSharesExtendedEHash: Propagating solution to the Template Provider.");
+                            let solution = SubmitSolution {
+                                template_id,
+                                version: msg.version,
+                                header_timestamp: msg.ntime,
+                                header_nonce: msg.nonce,
+                                coinbase_tx: coinbase.try_into()?,
+                            };
+                            messages.push(TemplateDistribution::SubmitSolution(solution.clone()).into());
+                        }
+                        let share_accounting = extended_channel.get_share_accounting().clone();
+                        let success = SubmitSharesSuccess {
+                            channel_id,
+                            last_sequence_number: share_accounting.get_last_share_sequence_number(),
+                            new_submits_accepted_count: share_accounting.get_last_batch_accepted(),
+                            new_shares_sum: share_accounting.get_last_batch_work_sum() as u64,
+                        };
+                        is_downstream_share_valid = true;
+                        messages.push((
+                            downstream.downstream_id,
+                            Mining::SubmitSharesSuccess(success),
+                        ).into());
+
+                        // Mint Mode: Send mint data to mint_sender (for block found)
+                        // Same as valid case, but include template_id and coinbase
+                        let locking_pubkey_bytes: &[u8] = msg.locking_pubkey.inner_as_ref();
+                        if let Ok(locking_pubkey) = stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey::from_slice(locking_pubkey_bytes) {
+                            let user_identity = extended_channel.get_user_identity();
+
+                            let mint_data = ehash_integration::types::EHashMintData {
+                                share_hash: share_hash,
+                                block_found: true,
+                                channel_id,
+                                user_identity: user_identity.clone(),
+                                target: *extended_channel.get_target(),
+                                sequence_number: msg.sequence_number,
+                                timestamp: std::time::SystemTime::now(),
+                                template_id,
+                                coinbase: Some(coinbase_for_mint),
+                                locking_pubkey,
+                            };
+
+                            // Send directly to mint_sender
+                            if let Some(mint_sender) = &channel_manager_data.mint_sender {
+                                if let Err(e) = mint_sender.try_send(mint_data) {
+                                    warn!("Failed to send EHashMintData to mint thread: {}", e);
+                                } else {
+                                    info!(
+                                        "Sent EHashMintData to mint thread (block found): channel={}, seq={}",
+                                        channel_id, msg.sequence_number
+                                    );
+                                }
+                            }
+                        } else {
+                            warn!(
+                                "Failed to parse locking_pubkey from SubmitSharesExtendedEHash (block found): channel={}, seq={}",
+                                channel_id, msg.sequence_number
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        let code = match err {
+                            ShareValidationError::Invalid => "invalid-share",
+                            ShareValidationError::Stale => "stale-share",
+                            ShareValidationError::InvalidJobId => "invalid-job-id",
+                            ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
+                            ShareValidationError::DuplicateShare => "duplicate-share",
+                            _ => unreachable!(),
+                        };
+                        error!("❌ SubmitSharesError on downstream channel: ch={}, seq={}, error={code}", channel_id, msg.sequence_number);
+                        messages.push((*downstream_id, build_error(code)).into());
+                    }
+                }
+
+                if !is_downstream_share_valid {
+                    return Ok(messages);
+                }
+
+                // Share validation succeeded - mint data already sent to mint_sender above
+                // Now forward share upstream (as standard SubmitSharesExtended in Mint mode)
+
+                if let Some(upstream_channel) = channel_manager_data.upstream_channel.as_mut() {
+                    let prefix = extended_channel.get_extranonce_prefix().clone();
+                    let mut extranonce_parts = Vec::new();
+                    let up_prefix = upstream_channel.get_extranonce_prefix();
+                    extranonce_parts.extend_from_slice(&prefix[up_prefix.len()..]);
+
+                    // Mint mode: Forward as standard SubmitSharesExtended (no locking_pubkey)
+                    // JDC will mint eHash locally, so we don't request it from upstream
+                    let upstream_message = channel_manager_data
+                    .downstream_channel_id_and_job_id_to_template_id
+                    .get(&(channel_id, job_id))
+                    .and_then(|tid| channel_manager_data.template_id_to_upstream_job_id.get(tid))
+                    .map(|&upstream_job_id| {
+                        extranonce_parts.extend_from_slice(&msg.extranonce.to_vec());
+                        let extranonce_combined = extranonce_parts.clone().try_into().unwrap();
+
+                        SubmitSharesExtended {
+                            channel_id: upstream_channel.get_channel_id(),
+                            job_id: upstream_job_id as u32,
+                            extranonce: extranonce_combined,
+                            nonce: msg.nonce,
+                            ntime: msg.ntime,
+                            sequence_number: 0,
+                            version: msg.version,
+                        }
+                    });
+
+                    if let Some(mut share) = upstream_message {
+                        let res = upstream_channel.validate_share(share.clone());
+                        match res {
+                            Ok(client::share_accounting::ShareValidationResult::Valid(share_hash)) => {
+                                share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                info!(
+                                    "SubmitSharesExtendedEHash (Mint mode) -> Standard, forwarding to upstream: valid share | channel_id: {}, sequence_number: {}, share_hash: {}  ✅",
+                                    channel_id, share.sequence_number, share_hash
+                                );
+                                messages.push(Mining::SubmitSharesExtended(share).into());
+                            }
+                            Ok(client::share_accounting::ShareValidationResult::BlockFound(share_hash)) => {
+                                share.sequence_number = channel_manager_data.sequence_number_factory.fetch_add(1, Ordering::Relaxed);
+                                info!("SubmitSharesExtendedEHash (Mint mode) -> Standard forwarding to upstream: 💰 Block Found!!! 💰{share_hash}");
+                                let push_solution = PushSolution {
+                                    extranonce: extended_channel.get_extranonce_prefix().to_vec().try_into()?,
+                                    ntime: share.ntime,
+                                    nonce: share.nonce,
+                                    version: share.version,
+                                    nbits: prev_hash.n_bits,
+                                    prev_hash: prev_hash.prev_hash.clone(),
+                                };
+                                messages.push(JobDeclaration::PushSolution(push_solution).into());
+                                messages.push(Mining::SubmitSharesExtended(share).into());
+                            }
+                            Err(err) => {
+                                let code = match err {
+                                    client::share_accounting::ShareValidationError::Invalid => "invalid-share",
+                                    client::share_accounting::ShareValidationError::Stale => "stale-share",
+                                    client::share_accounting::ShareValidationError::InvalidJobId => "invalid-job-id",
+                                    client::share_accounting::ShareValidationError::DoesNotMeetTarget => "difficulty-too-low",
+                                    client::share_accounting::ShareValidationError::DuplicateShare => "duplicate-share",
+                                    _ => unreachable!(),
+                                };
+                                debug!("❌ SubmitSharesError not forwarding to upstream: ch={}, seq={}, error={code}", channel_id, share.sequence_number);
                             }
                         }
                     }

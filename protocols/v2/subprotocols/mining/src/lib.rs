@@ -56,7 +56,8 @@ pub use set_group_channel::SetGroupChannel;
 pub use set_new_prev_hash::SetNewPrevHash;
 pub use set_target::SetTarget;
 pub use submit_shares::{
-    SubmitSharesError, SubmitSharesExtended, SubmitSharesStandard, SubmitSharesSuccess,
+    SubmitSharesError, SubmitSharesExtended, SubmitSharesExtendedEHash, SubmitSharesStandard,
+    SubmitSharesSuccess,
 };
 pub use update_channel::{UpdateChannel, UpdateChannelError};
 
@@ -75,6 +76,7 @@ pub const MESSAGE_TYPE_SUBMIT_SHARES_STANDARD: u8 = 0x1a;
 pub const MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED: u8 = 0x1b;
 pub const MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS: u8 = 0x1c;
 pub const MESSAGE_TYPE_SUBMIT_SHARES_ERROR: u8 = 0x1d;
+pub const MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH: u8 = 0x1e;
 pub const MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB: u8 = 0x1f;
 pub const MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH: u8 = 0x20;
 pub const MESSAGE_TYPE_SET_TARGET: u8 = 0x21;

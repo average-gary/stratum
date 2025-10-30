@@ -100,6 +100,8 @@ pub enum JDCError {
     ///Channel Errors
     ChannelSv2(ChannelSv2Error),
     ExtranoncePrefixFactoryError(ExtendedExtranonceError),
+    /// Custom error message for eHash integration and other custom errors
+    Custom(String),
 }
 
 impl std::error::Error for JDCError {}
@@ -199,6 +201,7 @@ impl fmt::Display for JDCError {
             ChannelSv2(channel_error) => {
                 write!(f, "Channel error: {channel_error:?}")
             }
+            Custom(ref s) => write!(f, "Custom error: {s}"),
         }
     }
 }

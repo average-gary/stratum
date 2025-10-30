@@ -1,3 +1,4 @@
+use ehash_integration::config::JdcEHashConfig;
 use serde::Deserialize;
 use std::{
     net::SocketAddr,
@@ -47,6 +48,15 @@ pub struct JobDeclaratorClientConfig {
     /// JDC mode: FullTemplate or CoinbaseOnly
     #[serde(deserialize_with = "deserialize_jdc_mode", default)]
     pub mode: ConfigJDCMode,
+    /// Optional eHash configuration for JDC mint/wallet functionality
+    /// When configured, JDC can operate as either a mint or wallet for eHash tokens
+    pub ehash_config: Option<JdcEHashConfig>,
+    /// Optional locking pubkey for JDC (hpub format: bech32-encoded with 'hpub' HRP)
+    /// - Mint mode: JDC uses this pubkey when forwarding shares upstream as a normal miner
+    /// - Wallet mode: This is used as fallback; per-downstream miner pubkeys preferred
+    /// Format: hpub1... (e.g., "hpub1qw508d6qejxtdg4y5r3zarvary0c5xw7kqqqqqqqqqqqqqqn6xvv0")
+    /// If not provided, a default pubkey will be generated
+    pub jdc_locking_pubkey: Option<String>,
 }
 
 impl JobDeclaratorClientConfig {
@@ -62,6 +72,8 @@ impl JobDeclaratorClientConfig {
         upstreams: Vec<Upstream>,
         jdc_signature: String,
         jdc_mode: Option<String>,
+        ehash_config: Option<JdcEHashConfig>,
+        jdc_locking_pubkey: Option<String>,
     ) -> Self {
         Self {
             listening_address,
@@ -82,6 +94,8 @@ impl JobDeclaratorClientConfig {
             mode: jdc_mode
                 .map(|s| s.parse::<ConfigJDCMode>().unwrap_or_default())
                 .unwrap_or_default(),
+            ehash_config,
+            jdc_locking_pubkey,
         }
     }
 
@@ -162,6 +176,54 @@ impl JobDeclaratorClientConfig {
 
     pub fn share_batch_size(&self) -> u64 {
         self.share_batch_size
+    }
+
+    /// Returns the optional eHash configuration
+    pub fn ehash_config(&self) -> Option<&JdcEHashConfig> {
+        self.ehash_config.as_ref()
+    }
+
+    /// Returns the optional JDC locking pubkey (hex string)
+    pub fn jdc_locking_pubkey(&self) -> Option<&str> {
+        self.jdc_locking_pubkey.as_deref()
+    }
+
+    /// Parses and returns the JDC locking pubkey as a secp256k1 PublicKey
+    ///
+    /// Returns None if no pubkey is configured or if parsing fails
+    pub fn get_parsed_jdc_locking_pubkey(&self) -> Option<stratum_apps::stratum_core::bitcoin::secp256k1::PublicKey> {
+        self.jdc_locking_pubkey.as_ref().and_then(|hpub_str| {
+            // Parse hpub format (bech32-encoded with 'hpub' HRP)
+            ehash_integration::hpub::parse_hpub(hpub_str).ok()
+        })
+    }
+
+    /// Validates the eHash configuration
+    ///
+    /// Ensures that:
+    /// - If mode is Mint, then mint config is present
+    /// - If mode is Wallet, then wallet config is present
+    pub fn validate_ehash_config(&self) -> Result<(), String> {
+        if let Some(ehash_config) = &self.ehash_config {
+            match ehash_config.mode {
+                ehash_integration::config::JdcEHashMode::Mint => {
+                    if ehash_config.mint.is_none() {
+                        return Err(
+                            "eHash mode is 'mint' but no mint configuration provided".to_string()
+                        );
+                    }
+                }
+                ehash_integration::config::JdcEHashMode::Wallet => {
+                    if ehash_config.wallet.is_none() {
+                        return Err(
+                            "eHash mode is 'wallet' but no wallet configuration provided"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -290,5 +352,197 @@ impl Upstream {
             jds_address,
             jds_port,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jdc_config_without_ehash() {
+        let config_toml = r#"
+            listening_address = "127.0.0.1:34265"
+            max_supported_version = 2
+            min_supported_version = 2
+            authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            cert_validity_sec = 3600
+            tp_address = "127.0.0.1:8442"
+            jdc_signature = "test"
+            user_identity = "test_user"
+            shares_per_minute = 6.0
+            share_batch_size = 10
+            coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+            mode = "FULLTEMPLATE"
+
+            [[upstreams]]
+            authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            pool_address = "127.0.0.1"
+            pool_port = 34254
+            jds_address = "127.0.0.1"
+            jds_port = 34264
+        "#;
+
+        let config: JobDeclaratorClientConfig = toml::from_str(config_toml).unwrap();
+        assert!(config.ehash_config.is_none());
+        assert!(config.validate_ehash_config().is_ok());
+    }
+
+    #[test]
+    fn test_jdc_config_with_ehash_mint_mode() {
+        let config_toml = r#"
+            listening_address = "127.0.0.1:34265"
+            max_supported_version = 2
+            min_supported_version = 2
+            authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            cert_validity_sec = 3600
+            tp_address = "127.0.0.1:8442"
+            jdc_signature = "test"
+            user_identity = "test_user"
+            shares_per_minute = 6.0
+            share_batch_size = 10
+            coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+            mode = "FULLTEMPLATE"
+
+            [[upstreams]]
+            authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            pool_address = "127.0.0.1"
+            pool_port = 34254
+            jds_address = "127.0.0.1"
+            jds_port = 34264
+
+            [ehash_config]
+            mode = "mint"
+
+            [ehash_config.mint]
+            mint_url = "https://mint.example.com"
+            min_leading_zeros = 32
+        "#;
+
+        let config: JobDeclaratorClientConfig = toml::from_str(config_toml).unwrap();
+        assert!(config.ehash_config.is_some());
+        let ehash_config = config.ehash_config.as_ref().unwrap();
+        assert_eq!(
+            ehash_config.mode,
+            ehash_integration::config::JdcEHashMode::Mint
+        );
+        assert!(ehash_config.mint.is_some());
+        assert!(config.validate_ehash_config().is_ok());
+    }
+
+    #[test]
+    fn test_jdc_config_with_ehash_wallet_mode() {
+        let config_toml = r#"
+            listening_address = "127.0.0.1:34265"
+            max_supported_version = 2
+            min_supported_version = 2
+            authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            cert_validity_sec = 3600
+            tp_address = "127.0.0.1:8442"
+            jdc_signature = "test"
+            user_identity = "test_user"
+            shares_per_minute = 6.0
+            share_batch_size = 10
+            coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+            mode = "FULLTEMPLATE"
+
+            [[upstreams]]
+            authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            pool_address = "127.0.0.1"
+            pool_port = 34254
+            jds_address = "127.0.0.1"
+            jds_port = 34264
+
+            [ehash_config]
+            mode = "wallet"
+
+            [ehash_config.wallet]
+            max_retries = 10
+        "#;
+
+        let config: JobDeclaratorClientConfig = toml::from_str(config_toml).unwrap();
+        assert!(config.ehash_config.is_some());
+        let ehash_config = config.ehash_config.as_ref().unwrap();
+        assert_eq!(
+            ehash_config.mode,
+            ehash_integration::config::JdcEHashMode::Wallet
+        );
+        assert!(ehash_config.wallet.is_some());
+        assert!(config.validate_ehash_config().is_ok());
+    }
+
+    #[test]
+    fn test_jdc_config_ehash_mint_mode_missing_config() {
+        let config_toml = r#"
+            listening_address = "127.0.0.1:34265"
+            max_supported_version = 2
+            min_supported_version = 2
+            authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            cert_validity_sec = 3600
+            tp_address = "127.0.0.1:8442"
+            jdc_signature = "test"
+            user_identity = "test_user"
+            shares_per_minute = 6.0
+            share_batch_size = 10
+            coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+            mode = "FULLTEMPLATE"
+
+            [[upstreams]]
+            authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            pool_address = "127.0.0.1"
+            pool_port = 34254
+            jds_address = "127.0.0.1"
+            jds_port = 34264
+
+            [ehash_config]
+            mode = "mint"
+        "#;
+
+        let config: JobDeclaratorClientConfig = toml::from_str(config_toml).unwrap();
+        let validation_result = config.validate_ehash_config();
+        assert!(validation_result.is_err());
+        assert!(validation_result
+            .unwrap_err()
+            .contains("mint configuration provided"));
+    }
+
+    #[test]
+    fn test_jdc_config_ehash_wallet_mode_missing_config() {
+        let config_toml = r#"
+            listening_address = "127.0.0.1:34265"
+            max_supported_version = 2
+            min_supported_version = 2
+            authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+            cert_validity_sec = 3600
+            tp_address = "127.0.0.1:8442"
+            jdc_signature = "test"
+            user_identity = "test_user"
+            shares_per_minute = 6.0
+            share_batch_size = 10
+            coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+            mode = "FULLTEMPLATE"
+
+            [[upstreams]]
+            authority_pubkey = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+            pool_address = "127.0.0.1"
+            pool_port = 34254
+            jds_address = "127.0.0.1"
+            jds_port = 34264
+
+            [ehash_config]
+            mode = "wallet"
+        "#;
+
+        let config: JobDeclaratorClientConfig = toml::from_str(config_toml).unwrap();
+        let validation_result = config.validate_ehash_config();
+        assert!(validation_result.is_err());
+        assert!(validation_result
+            .unwrap_err()
+            .contains("wallet configuration provided"));
     }
 }
