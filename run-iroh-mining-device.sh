@@ -24,7 +24,7 @@ echo "Pool NodeId: $POOL_NODE_ID"
 echo ""
 
 cargo run --manifest-path=roles/test-utils/mining-device/Cargo.toml --features iroh -- \
-    --pool-iroh-node-id "$POOL_NODE_ID" \
+    --pool-iroh-node-id bc9d2c7205cf13ec8e3b9edf0204c35ac9d9ca272d7326fc76305d7ce18b8e27 \
     --pool-iroh-alpn "sv2-m" \
     --iroh-secret-key-path ./mining-device-iroh-secret.key \
     --pubkey-pool 9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72 \
