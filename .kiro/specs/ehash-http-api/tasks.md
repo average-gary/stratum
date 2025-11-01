@@ -5,24 +5,74 @@ This document breaks down the eHash HTTP API implementation into focused tasks. 
 ## Task 1: CDK Submodule Branch Setup
 
 ### 1.1 Create eHash-specific branch in CDK submodule
-- [ ] Create new branch `ehash-v0.13.x` from current v0.13.x in `deps/cdk` submodule
-- [ ] Switch CDK submodule to the new eHash branch
-- [ ] Update submodule reference to point to new branch
-- [ ] Configure build system to use the eHash branch
-- [ ] Document branch strategy and maintenance workflow
+- [x] Create new branch `ehash-v0.13.x` from current v0.13.x in `deps/cdk` submodule
+- [x] Switch CDK submodule to the new eHash branch
+- [x] Update submodule reference to point to new branch
+- [x] Configure build system to use the eHash branch
+- [x] Document branch strategy and maintenance workflow
 - **Requirements**: CDK integration strategy
 - **Files**: `deps/cdk` (submodule), `.gitmodules`, `Cargo.toml` dependencies
-- **Status**: NEEDS IMPLEMENTATION - Currently on v0.13.x, need eHash-specific branch
+- **Status**: ✅ COMPLETED
+
+**Branch Strategy and Maintenance Workflow:**
+
+The `ehash-v0.13.x` branch has been successfully created and configured in the CDK submodule (`deps/cdk`). This branch is based on CDK v0.13.3 and serves as our stable foundation for eHash-specific extensions.
+
+**Current Configuration:**
+- Branch: `ehash-v0.13.x` (commit 6ef8f3e3 - v0.13.3)
+- Remote: `origin` → https://github.com/average-gary/cdk.git
+- Upstream tracking: `upstream` → https://github.com/cashubtc/cdk.git
+- `.gitmodules` configuration: branch = ehash-v0.13.x
+
+**Maintenance Workflow:**
+1. **Local Development**: All eHash-specific CDK changes are committed to the `ehash-v0.13.x` branch
+2. **Remote Sync**: Changes are pushed to `average-gary/cdk.git` fork
+3. **Upstream Updates**: Periodically sync with upstream `cashubtc/cdk` v0.13.x branch:
+   ```bash
+   cd deps/cdk
+   git fetch upstream
+   git rebase upstream/v0.13.x  
+   git push origin ehash-v0.13.x
+   ```
+4. **Submodule Updates**: After pushing CDK changes, update parent repo:
+   ```bash
+   cd ../..
+   git add deps/cdk
+   git commit -m "chore(cdk): update submodule to latest ehash-v0.13.x"
+   ```
+
+**Philosophy:**
+- Keep eHash changes isolated in our branch to avoid upstream conflicts
+- Track upstream v0.13.x for bug fixes and security updates
+- Consider upstreaming generic improvements that benefit the broader CDK ecosystem
+- Maintain clear separation between eHash-specific features and general CDK enhancements
 
 ## Task 2: CDK Mint Extension for Pubkey Queries
 
 ### 2.1 Add pubkey-based quote query method to CDK Mint
-- [ ] Add `get_mint_quotes_by_pubkey(&self, pubkey: &PublicKey) -> Result<Vec<MintQuote>, Error>` method to CDK Mint
-- [ ] Implement database query to filter quotes by pubkey field (database already has pubkey column)
-- [ ] Add unit tests for pubkey-based quote filtering
-- [ ] Ensure method only returns quotes where `quote.pubkey == provided_pubkey`
+- [x] Add `get_mint_quotes_by_pubkey(&self, pubkey: &PublicKey) -> Result<Vec<MintQuote>, Error>` method to CDK Mint
+- [x] Implement database query to filter quotes by pubkey field (database already has pubkey column)
+- [x] Add unit tests for pubkey-based quote filtering
+- [x] Ensure method only returns quotes where `quote.pubkey == provided_pubkey`
 - **Requirements**: 1.4, 1.5
-- **Files**: `deps/cdk/crates/cdk/src/mint/mod.rs`
+- **Files**:
+  - `deps/cdk/crates/cdk-common/src/database/mint/mod.rs` (trait definition)
+  - `deps/cdk/crates/cdk-sql-common/src/mint/mod.rs` (SQL implementation)
+  - `deps/cdk/crates/cdk/src/mint/issue/mod.rs` (Mint method)
+  - `deps/cdk/crates/cdk-common/src/database/mint/test/mint.rs` (unit tests)
+- **Status**: ✅ COMPLETED
+
+**Implementation Details:**
+- Added `get_mint_quotes_by_pubkey` method to the `QuotesDatabase` trait in `cdk-common/src/database/mint/mod.rs:238`
+- Implemented SQL query in `cdk-sql-common/src/mint/mod.rs:1371` that filters quotes by pubkey using `WHERE pubkey = :pubkey`
+- Added public method to Mint struct in `cdk/src/mint/issue/mod.rs:392` with proper instrumentation and prometheus metrics
+- Created comprehensive unit test in `cdk-common/src/database/mint/test/mint.rs:409` that validates:
+  - Multiple quotes with same pubkey are returned
+  - Only quotes matching the specified pubkey are returned
+  - Quotes with different pubkeys are excluded
+  - Quotes without pubkeys are excluded
+  - Empty result when querying for non-existent pubkey
+- Test passes successfully: `test mint::test::get_mint_quotes_by_pubkey ... ok`
 
 ## Task 3: NUT-20 Extension Implementation
 
@@ -215,17 +265,17 @@ This document breaks down the eHash HTTP API implementation into focused tasks. 
 ## Implementation Status
 
 **CURRENT STATE ANALYSIS:**
-- ❌ CDK submodule is on v0.13.x but needs eHash-specific branch (Task 1 needed)
+- ✅ CDK submodule is on ehash-v0.13.x branch (Task 1 completed)
 - ✅ NUT-20 signature verification exists in CDK (`deps/cdk/crates/cashu/src/nuts/nut20.rs`)
 - ✅ cdk-axum framework exists with standard endpoints (`deps/cdk/crates/cdk-axum/`)
 - ✅ hpub parsing functions exist in common library (`common/ehash/src/hpub.rs`)
-- ❌ No pubkey-based quote query method in CDK Mint
+- ✅ Pubkey-based quote query method in CDK Mint (Task 2 completed)
 - ❌ No NUT-20 extension endpoints in cdk-axum
 - ❌ No HTTP server integration in Pool/JDC roles
 - ❌ No HTTP API configuration structures
 
 **NEXT STEPS:**
-Start with Task 1 (create eHash CDK branch) then Task 2 (CDK Mint extension).
+Tasks 1 and 2 are complete. Proceed with Task 3 (NUT-20 Extension Implementation).
 
 ## Notes
 
