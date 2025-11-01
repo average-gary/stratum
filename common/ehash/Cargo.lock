@@ -461,7 +461,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cashu"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "bitcoin",
  "cbor-diag",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "cdk"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "cdk-common"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "cdk-signatory"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -614,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "cdk-sql-common"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "async-trait",
  "bitcoin",
@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "cdk-sqlite"
-version = "0.13.1"
+version = "0.13.3"
 dependencies = [
  "async-trait",
  "bitcoin",
