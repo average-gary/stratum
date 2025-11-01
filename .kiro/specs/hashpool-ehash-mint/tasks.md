@@ -469,28 +469,29 @@ The JDC (Job Declarator Client) can operate in two distinct eHash modes:
 
 ### 8.2 Add locking_pubkey to SubmitSharesExtended in TProxy
 - [x] Use PubKey33 field in SubmitSharesExtended message (completed in Task 5.4)
-- [ ] Extract pubkey from channel's stored hpub
-- [ ] Set msg.locking_pubkey to 33-byte compressed secp256k1 pubkey when submitting upstream
-- [ ] Add to SubmitSharesExtended message construction
+- [x] Extract pubkey from channel's stored hpub (pubkey stored in DownstreamData.locking_pubkey from Task 6.6)
+- [x] Set msg.locking_pubkey to 33-byte compressed secp256k1 pubkey when submitting upstream
+- [x] Add to SubmitSharesExtended message construction
 - **Requirements**: 2.5, 2.6
-- **Files**: TProxy upstream share submission
-- **Implementation Note**: Uses direct PubKey33 field instead of TLV 0x0004
+- **Files**: `roles/translator/src/lib/sv1/downstream/message_handler.rs:115-124` (populates SubmitShareWithChannelId), `protocols/stratum-translation/src/sv1_to_sv2.rs:52-89` (converts to SubmitSharesExtendedEHash), `roles/translator/src/lib/sv1/sv1_server/sv1_server.rs:369-412` (sends upstream)
+- **Implementation Note**: Uses direct PubKey33 field instead of TLV 0x0004. Full pipeline: DownstreamData.locking_pubkey → SubmitShareWithChannelId.locking_pubkey → build_sv2_submit_shares_extended_from_sv1_submit() → SubmitSharesExtendedEHash.locking_pubkey → upstream Pool
 
 ### 8.3 Add locking_pubkey extraction in Pool
 - [x] PubKey33 field extraction implemented in Task 5.4 via extract_pubkey_from_share()
 - [x] Validation implemented (rejects all-zeros, validates secp256k1 format)
-- [ ] Integrate into share submission handler
+- [x] Integrate into share submission handler
 - **Requirements**: 2.6
-- **Files**: Pool share submission handler (completed in `roles/pool/src/lib/channel_manager/mod.rs:534-571`)
-- **Implementation Note**: Direct field extraction instead of TLV parsing
+- **Files**: `roles/pool/src/lib/channel_manager/mod.rs:534-571` (extraction method), `roles/pool/src/lib/channel_manager/mining_message_handler.rs:827-1000` (integration)
+- **Implementation Note**: Direct field extraction instead of TLV parsing. Integrated in handle_submit_shares_extended_ehash for both valid shares and block found events.
 
 ### 8.4 Update Pool share validation to include locking_pubkey
-- [ ] Call extract_pubkey_from_share() for SubmitSharesExtended messages
-- [ ] Pass extracted pubkey to EHashMintData creation
-- [ ] Include locking_pubkey in all mint events
-- [ ] Ensure pubkey flows through to mint quote creation
+- [x] Call extract_pubkey_from_share() for SubmitSharesExtendedEHash messages
+- [x] Pass extracted pubkey to EHashMintData creation
+- [x] Include locking_pubkey in all mint events (both valid shares and block found)
+- [x] Ensure pubkey flows through to mint quote creation
 - **Requirements**: 2.6
-- **Files**: Pool share validation integration
+- **Files**: `roles/pool/src/lib/channel_manager/mining_message_handler.rs:876-903` (valid shares), `roles/pool/src/lib/channel_manager/mining_message_handler.rs:926-952` (block found)
+- **Implementation Note**: Extraction called at lines 878 and 927. Pubkey included in EHashMintData at lines 893 and 942. Mint data sent to MintHandler which creates NUT-20 P2PK quotes.
 
 ### 8.5 Add hpub configuration examples
 - [ ] Document hpub format in TProxy configuration
@@ -509,13 +510,116 @@ The JDC (Job Declarator Client) can operate in two distinct eHash modes:
 - **Requirements**: 2.1, 2.5, 2.7, 2.8
 - **Files**: Protocol integration tests
 
-## Phase 9: Integration Testing
+## Phase 9: HTTP API for External Wallets
 
-### 9.1 Add end-to-end Pool→Mint→Wallet test
-- [ ] Set up test Pool with mint configuration
+**Status**: NOT IMPLEMENTED - Current implementation only has internal CDK library, no HTTP server
+
+### 9.1 Add HTTP server configuration
+- [ ] Add `cdk-axum` dependency to Pool and JDC
+- [ ] Add `mint_http_port` field to MintConfig
+- [ ] Add `enable_http_api` flag to control HTTP server
+- [ ] Document HTTP API configuration in examples
+- **Requirements**: External wallet access, NUT-04/NUT-20 compliance
+- **Files**: `common/ehash/src/config.rs`, `roles/pool/config-examples/`
+- **Current Gap**: Pool has CDK Mint but no HTTP endpoints - wallets can't query or redeem tokens
+
+### 9.2 Implement HTTP server in Pool
+- [ ] Create HTTP server using `cdk-axum`
+- [ ] Spawn HTTP server task in Pool main thread
+- [ ] Share CDK Mint instance between Stratum and HTTP handlers
+- [ ] Add graceful shutdown for HTTP server
+- **Requirements**: NUT-04/NUT-20 external wallet access
+- **Files**: `roles/pool/src/main.rs`, `roles/pool/src/lib/http_api/mod.rs` (new)
+- **Architecture**: Single CDK Mint instance, dual interfaces (internal minting + external HTTP)
+
+### 9.3 Add NUT-20 authenticated quote query endpoint
+- [ ] Add `GET /v1/mint/quotes/pubkey/{pubkey}` endpoint
+- [ ] Require NUT-20 signature in request header or body
+- [ ] Verify signature: `verify(sign(message="get_quotes:{pubkey}", privkey), pubkey)`
+- [ ] Reject unsigned or invalid signature requests (401 Unauthorized)
+- [ ] Filter and return PAID quotes for that pubkey only
+- [ ] Support both "HASH" and "sat" units in response
+- **Requirements**: NUT-20 authentication, privacy (can't query others' quotes)
+- **Files**: `roles/pool/src/lib/http_api/nut20_quotes.rs` (new)
+- **Security**: CRITICAL - Must verify signature to prevent unauthorized quote enumeration
+- **Note**: This is eHash-specific, not standard Cashu - may need cdk-axum fork
+
+### 9.3b Modify cdk-axum for multi-unit support
+- [ ] Verify cdk-axum handles multiple currency units (HASH + sat)
+- [ ] Ensure keyset endpoints return unit-specific keysets
+- [ ] Add unit filtering to relevant endpoints
+- [ ] Test mint initialization with ["HASH", "sat"] units
+- **Requirements**: Multi-unit mint support
+- **Files**: Fork/PR to `cdk-axum` if needed
+- **Dependencies**: May need upstream CDK changes
+
+### 9.4 Add standard NUT-04 endpoints
+- [ ] `GET /v1/mint/quote/bolt11/{quote_id}` - Check specific quote status
+- [ ] Return error for `POST /v1/mint/quote/bolt11` (quotes created internally, not via HTTP)
+- **Requirements**: NUT-04 partial compliance
+- **Files**: `roles/pool/src/lib/http_api/mint_quotes.rs` (new)
+- **Note**: Only quote checking supported, not creation via HTTP
+
+### 9.5 Add NUT-04 Minting endpoints with NUT-20 authentication
+- [ ] `POST /v1/mint/bolt11` - Mint tokens with NUT-20 P2PK authentication
+- [ ] Verify P2PK signature in MintRequest (NUT-20 requirement)
+- [ ] Verify quote.locking_pubkey matches request pubkey
+- [ ] Return blind signatures for valid requests only
+- [ ] Support both "HASH" and "sat" units
+- **Requirements**: NUT-04 minting, NUT-20 P2PK authentication
+- **Files**: `roles/pool/src/lib/http_api/mint.rs` (new)
+- **Security**: CRITICAL - Must validate locking_pubkey signature per NUT-20
+- **Note**: Standard NUT-20 flow, but quote was created internally (not via HTTP)
+
+### 9.6 Add NUT-01 Info endpoints with multi-unit support
+- [ ] `GET /v1/info` - Return mint info (version, supported units ["HASH", "sat"], etc.)
+- [ ] `GET /v1/keys` - Return active keyset info for both units
+- [ ] `GET /v1/keys/{keyset_id}` - Return specific keyset
+- [ ] Ensure unit-specific keysets are properly exposed
+- **Requirements**: NUT-01 compliance, wallet discovery, multi-unit support
+- **Files**: `roles/pool/src/lib/http_api/info.rs` (new)
+- **Note**: Must advertise both HASH and sat support in mint info
+
+### 9.7 Implement HTTP server in JDC (Mint mode)
+- [ ] Add same HTTP server implementation for JDC Mint mode
+- [ ] Reuse HTTP handler code from Pool
+- [ ] Share CDK Mint instance between JDC and HTTP handlers
+- **Requirements**: JDC as terminal mint with external wallet access
+- **Files**: `roles/jd-client/src/main.rs`, reuse Pool HTTP handlers
+- **Note**: Only needed when JDC is in Mint mode
+
+### 9.8 Add HTTP API integration tests
+- [ ] Test mint info endpoint with multi-unit support
+- [ ] Test authenticated quote query (valid signature)
+- [ ] Test unauthorized quote query (invalid/missing signature) - should reject
+- [ ] Test token minting with NUT-20 authentication
+- [ ] Test keyset endpoints for both HASH and sat
+- [ ] Test multi-unit minting flow
+- **Requirements**: NUT-01, NUT-04, NUT-20 compliance, security validation
+- **Files**: Integration tests
+- **Dependencies**: Requires cdk-cli or test wallet for full flow
+- **Security tests**: Must verify rejection of unsigned/invalid requests
+
+### 9.9 Document HTTP API usage and eHash-specific extensions
+- [ ] Document HTTP API configuration (ports, units, etc.)
+- [ ] Document eHash-specific endpoint: `GET /v1/mint/quotes/pubkey/{pubkey}`
+- [ ] Document signature format for authenticated quote queries
+- [ ] Provide curl examples for all endpoints (with signature examples)
+- [ ] Document NUT-20 P2PK authentication flow
+- [ ] Add example wallet redemption workflow
+- [ ] Document multi-unit support (HASH + sat)
+- **Requirements**: User documentation, eHash extension specification
+- **Files**: README, API documentation, eHash extension spec
+- **Note**: Document deviations from standard Cashu (authenticated quote queries)
+
+## Phase 10: Integration Testing
+
+### 10.1 Add end-to-end Pool→Mint→Wallet test
+- [ ] Set up test Pool with mint configuration and HTTP API
 - [ ] Set up test TProxy with wallet configuration
 - [ ] Submit shares and verify mint events
 - [ ] Verify P2PK token creation
+- [ ] Use cdk-cli to query and redeem tokens via HTTP API
 - **Requirements**: 1.6, 8.4
 - **Files**: Integration test suite
 

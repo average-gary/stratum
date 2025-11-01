@@ -1,0 +1,59 @@
+# SRI Pool config with eHash minting enabled
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+cert_validity_sec = 3600
+test_only_listen_adress_plain =  "0.0.0.0:34250"
+listen_address = "0.0.0.0:34254"
+
+# Coinbase outputs are specified as descriptors. A full list of descriptors is available at
+#     https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki#appendix-b-index-of-script-expressions
+# Although the `musig` descriptor is not yet supported and the legacy `combo` descriptor never
+# will be. If you have an address, embed it in a descriptor like `addr(<address here>)`.
+coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+
+# Server Id (number to guarantee unique search space allocation across different Pool servers)
+server_id = 1
+
+# Pool signature (string to be included in coinbase tx)
+pool_signature = "Stratum V2 SRI Pool"
+
+# Enable this option to set a predefined log file path.
+# When enabled, logs will always be written to this file.
+# The CLI option --log-file (or -f) will override this setting if provided.
+# log_file = "./pool.log"
+
+
+# Template Provider config
+# Local TP (this is pointing to localhost so you must run a TP locally for this configuration to work)
+tp_address = "127.0.0.1:8442"
+shares_per_minute = 6.0
+share_batch_size = 10
+
+# eHash Mint Configuration (Optional)
+# When enabled, the Pool will mint Cashu ecash eHash tokens for validated shares
+# External wallets can redeem tokens using NUT-04/NUT-20 authenticated flow
+[ehash_mint]
+# URL where the mint is accessible
+mint_url = "https://mint.hashpool.dev"
+
+# Optional: Mint private key (if not provided, a new key will be generated)
+# mint_private_key = "..."
+
+# Supported currency units (defaults to ["HASH", "sat"])
+# supported_units = ["HASH", "sat"]
+
+# Optional: Database URL for CDK persistence (sqlite, postgres, redb)
+# If not provided, uses in-memory database (not recommended for production)
+database_url = "sqlite://ehash_mint.db"
+
+# Minimum leading zero bits required to earn 1 unit of eHash (default: 32)
+# This is the hashpool standard difficulty threshold
+min_leading_zeros = 32
+
+# Fault tolerance configuration
+# max_retries = 10              # Maximum retry attempts before disabling (default: 10)
+# backoff_multiplier = 2        # Backoff multiplier in seconds (default: 2)
+# recovery_enabled = true       # Enable automatic recovery (default: true)
+
+# Optional: Log level for mint operations
+# log_level = "info"

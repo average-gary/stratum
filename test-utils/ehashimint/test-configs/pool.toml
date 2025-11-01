@@ -1,0 +1,15 @@
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+cert_validity_sec = 3600
+listen_address = "127.0.0.1:34254"
+coinbase_reward_script = "addr(tb1qa0sm0hxzj0x25rh8gw5xlzwlsfvvyz8u96w3p8)"
+server_id = 1
+pool_signature = "eHash Test Pool"
+tp_address = "127.0.0.1:8442"
+shares_per_minute = 6.0
+share_batch_size = 10
+
+[ehash_mint]
+mint_url = "http://127.0.0.1:3338"
+database_url = "sqlite://./test-mint.db"
+min_leading_zeros = 32
