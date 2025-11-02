@@ -174,19 +174,39 @@ The `ehash-v0.13.x` branch has been successfully created and configured in the C
 ## Task 4: cdk-axum Router Integration
 
 ### 4.1 Add new endpoints to cdk-axum router
-- [ ] Add `POST /v1/mint/quotes/by-pubkey` route for quote discovery
-- [ ] Add `POST /v1/mint/ehash` route for eHash minting
-- [ ] Integrate routes into existing cdk-axum router configuration in `create_mint_router_with_custom_cache`
-- [ ] Ensure routes use shared CDK Mint state (MintState)
+- [x] Add `POST /v1/mint/quotes/by-pubkey` route for quote discovery
+- [x] Add `POST /v1/mint/ehash` route for eHash minting
+- [x] Integrate routes into existing cdk-axum router configuration in `create_mint_router_with_custom_cache`
+- [x] Ensure routes use shared CDK Mint state (MintState)
 - **Requirements**: 1.1, 2.1
 - **Files**: `deps/cdk/crates/cdk-axum/src/lib.rs`
+- **Status**: ✅ COMPLETED
+
+**Implementation Details:**
+- Added `POST /v1/mint/quotes/by-pubkey` route in `lib.rs:307` that calls `get_quotes_by_pubkey` handler
+- Added `POST /v1/mint/ehash` route in `lib.rs:308` that calls `mint_ehash_tokens` handler
+- Routes integrated into v1_router alongside existing CDK endpoints
+- Both routes use shared MintState containing Arc<Mint> and Arc<HttpCache>
+- Added utoipa/swagger annotations for API documentation (feature-gated)
+- Added NUT-20 extension types to swagger schemas in both auth and non-auth configurations
 
 ### 4.2 Add proper error handling and logging
-- [ ] Implement structured JSON error responses using existing cdk-axum error handling patterns
-- [ ]* Add security logging for authentication failures
-- [ ] Map CDK errors to appropriate HTTP status codes using existing `into_response` helper
+- [x] Implement structured JSON error responses using existing cdk-axum error handling patterns
+- [x] Add security logging for authentication failures
+- [x] Map CDK errors to appropriate HTTP status codes using existing `into_response` helper
 - **Requirements**: Security and logging from design
 - **Files**: `deps/cdk/crates/cdk-axum/src/nut20_extension.rs`
+- **Status**: ✅ COMPLETED
+
+**Implementation Details:**
+- Error handling already implemented in Task 3 handlers (get_quotes_by_pubkey, mint_ehash_tokens)
+- All errors mapped to appropriate HTTP status codes: 400 (Bad Request), 401 (Unauthorized), 404 (Not Found), 409 (Conflict), 500 (Internal Server Error)
+- Security logging implemented with `warn!()` for all authentication failures
+- Structured JSON error responses use CDK's `ErrorResponse` with appropriate `ErrorCode`
+- Both handlers instrumented with `#[instrument(skip(state))]` for tracing
+- Debug logging for successful operations, warn logging for failures
+- All tests pass: 7/7 unit tests successful
+- Workspace builds successfully with no errors
 
 ## Task 5: Pool Role HTTP Server Integration
 
@@ -326,12 +346,16 @@ The `ehash-v0.13.x` branch has been successfully created and configured in the C
   - `mint_ehash_tokens()` handler for eHash minting
   - All request/response structs defined
   - Comprehensive tests passing (7/7)
-- ❌ Endpoints not yet added to router (Task 4 pending)
-- ❌ No HTTP server integration in Pool/JDC roles
-- ❌ No HTTP API configuration structures
+- ✅ Endpoints added to router (Task 4 completed)
+  - Routes: `POST /v1/mint/quotes/by-pubkey` and `POST /v1/mint/ehash`
+  - Integrated with shared MintState (Arc<Mint> + Arc<HttpCache>)
+  - Swagger/OpenAPI documentation added
+  - Error handling and security logging complete
+- ❌ No HTTP server integration in Pool/JDC roles (Tasks 5 & 6 pending)
+- ❌ No HTTP API configuration structures (Tasks 5 & 6 pending)
 
 **NEXT STEPS:**
-Tasks 1, 2, and 3 are complete. Proceed with Task 4 (cdk-axum Router Integration).
+Tasks 1, 2, 3, and 4 are complete. Proceed with Task 5 (Pool Role HTTP Server Integration).
 
 ## Notes
 
