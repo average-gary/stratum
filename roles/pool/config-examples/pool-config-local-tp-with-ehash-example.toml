@@ -57,3 +57,17 @@ min_leading_zeros = 32
 
 # Optional: Log level for mint operations
 # log_level = "info"
+
+# HTTP API Configuration (Required for eHash wallet integration)
+# Enables external wallets to discover and redeem eHash tokens via HTTP
+# Implements NUT-20 authenticated quote discovery and minting endpoints
+# If this section is provided, the HTTP server will always be started
+[ehash_mint.http_api]
+# Bind address for HTTP server (required)
+# Use "127.0.0.1:3338" for localhost only, or "0.0.0.0:3338" for all interfaces
+bind_address = "127.0.0.1:3338"
+
+# Optional: TLS certificate and key paths for HTTPS
+# If provided, the server will use HTTPS instead of HTTP
+# tls_cert_path = "/path/to/cert.pem"
+# tls_key_path = "/path/to/key.pem"

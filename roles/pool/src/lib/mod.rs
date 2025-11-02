@@ -211,15 +211,20 @@ impl Drop for PoolSv2 {
     }
 }
 
-/// Spawns a mint thread for eHash token minting
+/// Spawns a mint thread for eHash token minting with optional HTTP API server
 ///
 /// Creates a MintHandler instance and spawns it as a dedicated async task managed by
 /// the TaskManager. The mint thread runs independently of mining operations and
 /// processes EHashMintData events sent via the returned async channel.
 ///
+/// If HTTP API is enabled in the config, this function also starts an HTTP server
+/// running concurrently with the mint handler in the same task using tokio::select!.
+/// This ensures the HTTP server shares the same CDK Mint instance and doesn't affect
+/// mining operations if it fails.
+///
 /// # Arguments
 /// * `task_manager` - TaskManager to register the mint thread with
-/// * `config` - MintConfig containing mint settings
+/// * `config` - MintConfig containing mint settings and HTTP API configuration
 /// * `shutdown_rx` - Shutdown signal receiver for graceful shutdown
 ///
 /// # Returns
@@ -231,11 +236,14 @@ pub async fn spawn_mint_thread(
 ) -> PoolResult<async_channel::Sender<EHashMintData>> {
     info!("Initializing eHash mint handler...");
 
-    let mut mint_handler = MintHandler::new(config).await.map_err(|e| {
+    let mut mint_handler = MintHandler::new(config.clone()).await.map_err(|e| {
         crate::error::PoolError::Custom(format!("Failed to initialize mint handler: {}", e))
     })?;
 
     let sender = mint_handler.get_sender();
+
+    // Get reference to the Mint instance for HTTP server
+    let mint = mint_handler.mint();
 
     // Create an async_channel for shutdown signal conversion
     let (shutdown_tx, shutdown_rx_async) = async_channel::bounded::<()>(1);
@@ -247,12 +255,46 @@ pub async fn spawn_mint_thread(
         }
     });
 
-    info!("Spawning mint handler task...");
+    // Create HTTP API server - always required for eHash
+    let bind_address = config.http_api.bind_address;
+    info!("Starting HTTP API server on {}", bind_address);
+
+    // Create the CDK Axum router with eHash NUT-20 extensions
+    let router = cdk_axum::create_mint_router(mint, false)
+        .await
+        .map_err(|e| {
+            crate::error::PoolError::Custom(format!("Failed to create HTTP router: {}", e))
+        })?;
+
+    // Create TCP listener
+    let listener = tokio::net::TcpListener::bind(bind_address)
+        .await
+        .map_err(|e| {
+            crate::error::PoolError::Custom(format!(
+                "Failed to bind HTTP server to {}: {}",
+                bind_address, e
+            ))
+        })?;
+
+    info!("HTTP API server listening on {}", bind_address);
+
+    info!("Spawning mint handler task with HTTP server...");
     task_manager.spawn(async move {
-        if let Err(e) = mint_handler.run_with_shutdown(shutdown_rx_async).await {
-            warn!("Mint handler error: {}", e);
+        // Run both mint handler and HTTP server concurrently
+        tokio::select! {
+            result = mint_handler.run_with_shutdown(shutdown_rx_async) => {
+                if let Err(e) = result {
+                    warn!("Mint handler error: {}", e);
+                }
+                info!("Mint handler task completed");
+            }
+            result = axum::serve(listener, router) => {
+                if let Err(e) = result {
+                    warn!("HTTP server error: {}", e);
+                }
+                info!("HTTP server task completed");
+            }
         }
-        info!("Mint handler task completed");
     });
 
     info!("eHash mint handler initialized successfully");

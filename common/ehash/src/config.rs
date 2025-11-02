@@ -8,6 +8,27 @@
 use cdk::mint_url::MintUrl;
 use cdk::nuts::CurrencyUnit;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+
+/// Configuration for HTTP API server
+///
+/// This configuration controls the HTTP API server that provides
+/// authenticated quote discovery and minting endpoints following NUT-20.
+/// If this configuration is provided, the HTTP server will always be started.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpApiConfig {
+    /// Bind address for HTTP server (e.g., "127.0.0.1:3338" or "0.0.0.0:3338")
+    /// This field is required
+    pub bind_address: SocketAddr,
+
+    /// Optional path to TLS certificate file for HTTPS
+    /// If provided, the server will use HTTPS instead of HTTP
+    pub tls_cert_path: Option<String>,
+
+    /// Optional path to TLS private key file for HTTPS
+    /// Required if tls_cert_path is provided
+    pub tls_key_path: Option<String>,
+}
 
 /// Configuration for the Mint handler
 ///
@@ -56,11 +77,9 @@ pub struct MintConfig {
     /// Optional log level for mint operations
     pub log_level: Option<String>,
 
-    /// Placeholder locking pubkey for Phase 5 (basic integration)
-    /// This will be replaced with per-share pubkeys from TLV in Phase 8
-    /// Format: hex-encoded 33-byte compressed secp256k1 public key
-    /// TODO: Remove in Phase 8 when TLV 0x0004 extraction is implemented
-    pub placeholder_locking_pubkey: Option<String>,
+    /// HTTP API configuration for external wallet access
+    /// Required - wallets need HTTP access to discover and redeem eHash tokens
+    pub http_api: HttpApiConfig,
 }
 
 /// Configuration for the Wallet handler

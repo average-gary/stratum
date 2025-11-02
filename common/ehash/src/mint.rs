@@ -282,6 +282,14 @@ impl MintHandler {
         self.receiver.clone()
     }
 
+    /// Get a reference to the CDK Mint instance
+    ///
+    /// This is useful for integrating with external systems like HTTP servers
+    /// that need access to the underlying Mint instance.
+    pub fn mint(&self) -> Arc<Mint> {
+        self.mint_instance.clone()
+    }
+
 
     /// Main processing loop for the mint thread
     ///
