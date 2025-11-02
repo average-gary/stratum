@@ -118,3 +118,13 @@ recovery_enabled = true
 
 # Optional: Log level for mint operations
 # log_level = "info"
+
+# HTTP API configuration (required for wallet access)
+# Wallets need HTTP access to discover and redeem eHash tokens
+[ehash_config.mint.http_api]
+# Bind address for HTTP server (required)
+bind_address = "127.0.0.1:3339"
+
+# Optional: TLS certificate and key for HTTPS support
+# tls_cert_path = "/path/to/cert.pem"
+# tls_key_path = "/path/to/key.pem"

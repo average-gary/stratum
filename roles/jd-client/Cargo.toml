@@ -18,6 +18,8 @@ path = "src/lib/mod.rs"
 [dependencies]
 stratum-apps = { path = "../stratum-apps", features = ["jd_client"] }
 ehash-integration = { path = "../../common/ehash" }
+cdk-axum = { path = "../../deps/cdk/crates/cdk-axum" }
+axum = "0.8"
 async-channel = "1.5.1"
 serde = { version = "1.0.89", default-features = false, features = ["derive", "alloc"] }
 tokio = { version = "1.44.1", features = ["full"] }
