@@ -1019,6 +1019,7 @@ pub enum MiningTypes {
     SetTarget = MESSAGE_TYPE_SET_TARGET,
     SubmitSharesError = MESSAGE_TYPE_SUBMIT_SHARES_ERROR,
     SubmitSharesExtended = MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+    SubmitSharesExtendedEHash = MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH,
     SubmitSharesStandard = MESSAGE_TYPE_SUBMIT_SHARES_STANDARD,
     SubmitSharesSuccess = MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     UpdateChannel = MESSAGE_TYPE_UPDATE_CHANNEL,
@@ -1053,6 +1054,7 @@ impl TryFrom<u8> for MiningTypes {
             MESSAGE_TYPE_SET_TARGET => Ok(MiningTypes::SetTarget),
             MESSAGE_TYPE_SUBMIT_SHARES_ERROR => Ok(MiningTypes::SubmitSharesError),
             MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED => Ok(MiningTypes::SubmitSharesExtended),
+            MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH => Ok(MiningTypes::SubmitSharesExtendedEHash),
             MESSAGE_TYPE_SUBMIT_SHARES_STANDARD => Ok(MiningTypes::SubmitSharesStandard),
             MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS => Ok(MiningTypes::SubmitSharesSuccess),
             MESSAGE_TYPE_UPDATE_CHANNEL => Ok(MiningTypes::UpdateChannel),
@@ -1136,6 +1138,10 @@ impl<'a> TryFrom<(u8, &'a mut [u8])> for Mining<'a> {
             MiningTypes::SubmitSharesExtended => {
                 let message: SubmitSharesExtended = from_bytes(v.1)?;
                 Ok(Mining::SubmitSharesExtended(message))
+            }
+            MiningTypes::SubmitSharesExtendedEHash => {
+                let message: SubmitSharesExtendedEHash = from_bytes(v.1)?;
+                Ok(Mining::SubmitSharesExtendedEHash(message))
             }
             MiningTypes::SubmitSharesStandard => {
                 let message: SubmitSharesStandard = from_bytes(v.1)?;

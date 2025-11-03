@@ -45,3 +45,7 @@ toml = "0.8"
 
 [features]
 default = []
+
+[[bin]]
+name = "gen-hpub"
+path = "src/bin/gen_hpub.rs"
