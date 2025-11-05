@@ -620,14 +620,22 @@ impl ChannelManager {
                         self.channel_manager_data.super_safe_lock(|c| {
                             c.upstream_extended_channel
                                 .as_ref()
-                                .unwrap()
-                                .read()
-                                .unwrap()
-                                .get_channel_id()
+                                .and_then(|ch| ch.read().ok())
+                                .map(|ch| ch.get_channel_id())
                         });
                     // We need to set the channel id to the upstream extended
-                    // channel id
-                    m.channel_id = upstream_extended_channel_id;
+                    // channel id. If not available during reconnection, return error.
+                    match upstream_extended_channel_id {
+                        Some(channel_id) => {
+                            m.channel_id = channel_id;
+                        }
+                        None => {
+                            warn!("UpdateChannel: upstream_extended_channel not available (likely during reconnection)");
+                            return Err(TproxyError::General(
+                                "Upstream channel not ready during UpdateChannel".to_string()
+                            ));
+                        }
+                    }
                 }
                 info!(
                     "Sending UpdateChannel message to upstream for channel_id: {:?}",

@@ -529,6 +529,15 @@ pub trait HandleMiningMessagesFromClientSync {
                 )),
             },
 
+            SubmitSharesExtendedEHash(m) => match channel_type {
+                SupportedChannelTypes::Extended | SupportedChannelTypes::GroupAndExtended => {
+                    self.handle_submit_shares_extended_ehash(client_id, m)
+                }
+                _ => Err(Self::Error::unexpected_message(
+                    MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH,
+                )),
+            },
+
             SetCustomMiningJob(m) => match (channel_type, work_selection) {
                 (SupportedChannelTypes::Extended, true)
                 | (SupportedChannelTypes::GroupAndExtended, true) => {
@@ -676,6 +685,15 @@ pub trait HandleMiningMessagesFromClientAsync {
                     }
                     _ => Err(Self::Error::unexpected_message(
                         MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+                    )),
+                },
+
+                SubmitSharesExtendedEHash(m) => match channel_type {
+                    SupportedChannelTypes::Extended | SupportedChannelTypes::GroupAndExtended => {
+                        self.handle_submit_shares_extended_ehash(client_id, m).await
+                    }
+                    _ => Err(Self::Error::unexpected_message(
+                        MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED_EHASH,
                     )),
                 },
 
