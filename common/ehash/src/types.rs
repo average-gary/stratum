@@ -69,17 +69,21 @@ pub struct EHashMintData {
 }
 
 impl EHashMintData {
-    /// Calculate eHash amount using hashpool's exponential valuation method
+    /// Calculate eHash amount by counting leading hex zeros
     ///
-    /// Formula: `2^(leading_zero_bits - minimum_difficulty)`
+    /// Formula: Count the number of leading '0' hex characters in the hash
     ///
     /// # Arguments
-    /// * `minimum_difficulty` - Minimum leading zero bits required to earn 1 unit of eHash
+    /// * `minimum_difficulty` - Minimum leading hex zeros required to earn any eHash
     ///
     /// # Returns
-    /// The eHash amount (0 if share doesn't meet minimum difficulty threshold)
+    /// The number of leading hex zeros (0 if below minimum threshold)
     pub fn calculate_ehash_amount(&self, minimum_difficulty: u32) -> u64 {
-        let hash_bytes: [u8; 32] = *self.share_hash.as_byte_array();
+        // Bitcoin hashes are stored in little-endian but difficulty is calculated on big-endian
+        // as_byte_array() returns internal (little-endian) representation
+        // We need to reverse to get the human-readable big-endian format for difficulty calculation
+        let mut hash_bytes: [u8; 32] = *self.share_hash.as_byte_array();
+        hash_bytes.reverse();
         crate::calculate_ehash_amount(hash_bytes, minimum_difficulty)
     }
 }

@@ -434,8 +434,10 @@ impl MintHandler {
         // If below minimum threshold, don't mint
         if ehash_amount == 0 {
             tracing::debug!(
-                "Share from channel {} below minimum difficulty threshold, skipping mint",
-                data.channel_id
+                "Share from channel {} below minimum difficulty threshold, skipping mint (hash: {}, min_zeros: {})",
+                data.channel_id,
+                data.share_hash,
+                self.config.min_leading_zeros
             );
             return Ok(());
         }

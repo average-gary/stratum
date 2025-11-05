@@ -29,41 +29,48 @@ pub fn calculate_difficulty(hash: [u8; 32]) -> u32 {
     leading_zeros
 }
 
-/// Calculate eHash amount for a share hash using exponential valuation
+/// Calculate eHash amount for a share hash by counting leading hex zeros
 ///
-/// Formula: `2^(leading_zero_bits - minimum_difficulty)`
+/// Formula: Count the number of leading '0' hex characters in the hash
 ///
 /// # Arguments
-/// * `hash` - The 32-byte share hash
-/// * `min_leading_zeros` - Minimum leading zero bits required to earn 1 unit of eHash
+/// * `hash` - The 32-byte share hash (big-endian format)
+/// * `min_leading_zeros` - Minimum leading hex zeros required to earn any eHash
 ///
 /// # Returns
-/// The eHash amount (0 if below minimum, capped at 2^63)
+/// The number of leading hex zeros (0 if below minimum threshold)
 ///
 /// # Examples
 /// ```
 /// use ehash_integration::calculate_ehash_amount;
 ///
-/// let hash = [0u8; 32]; // All zeros = 256 leading zero bits
-/// let amount = calculate_ehash_amount(hash, 32);
-/// // Returns 2^(256-32) capped at 2^63
+/// // Hash with 12 leading hex zeros
+/// let mut hash = [0xffu8; 32];
+/// hash[..6].fill(0x00); // 6 bytes = 12 hex zeros
+/// let amount = calculate_ehash_amount(hash, 10);
+/// // Returns 12 (the count of leading hex zeros)
 /// ```
 pub fn calculate_ehash_amount(hash: [u8; 32], min_leading_zeros: u32) -> u64 {
-    let leading_zeros = calculate_difficulty(hash);
+    // Count leading hex zeros (each byte = 2 hex chars)
+    let mut leading_hex_zeros = 0u32;
+
+    for byte in hash.iter() {
+        if *byte == 0 {
+            leading_hex_zeros += 2; // Each zero byte = 2 hex zeros
+        } else if *byte < 0x10 {
+            leading_hex_zeros += 1; // High nibble is zero
+            break;
+        } else {
+            break;
+        }
+    }
 
     // If below minimum threshold, return 0
-    if leading_zeros < min_leading_zeros {
+    if leading_hex_zeros < min_leading_zeros {
         return 0;
     }
 
-    let exponent = leading_zeros.saturating_sub(min_leading_zeros);
-
-    // Cap at 2^63 to stay within u64 bounds
-    if exponent >= 63 {
-        return 1u64 << 63;
-    }
-
-    1u64 << exponent
+    leading_hex_zeros as u64
 }
 
 #[cfg(test)]
