@@ -2,57 +2,57 @@
 
 This document breaks down the Interactive eHash Tutorial implementation into minimal, focused tasks to get something running quickly. We'll start with the bare minimum and iterate.
 
-## Phase 1: Minimal Viable Tutorial (MVP)
+## Phase 1: Minimal Viable Tutorial (MVP) ✅ COMPLETE
 
-### 1.1 Create basic project structure
-- [ ] Create `test-utils/ehash-tutorial/Cargo.toml` with minimal dependencies
-- [ ] Create `test-utils/ehash-tutorial/src/main.rs` with basic Ratatui app
-- [ ] Add basic dependencies: `ratatui`, `crossterm`, `tokio`, `anyhow`, `tui-input`, `clap`
-- [ ] Add to workspace `Cargo.toml`
-- **Goal**: Get a basic TUI app that compiles and runs
+### 1.1 Create basic project structure ✅
+- [x] Create `test-utils/ehash-tutorial/Cargo.toml` with minimal dependencies
+- [x] Create `test-utils/ehash-tutorial/src/main.rs` with basic Ratatui app
+- [x] Add basic dependencies: `ratatui`, `crossterm`, `tokio`, `anyhow`, `tui-input`, `clap`
+- [x] Add to workspace `Cargo.toml` (N/A - standalone binary)
+- **Goal**: Get a basic TUI app that compiles and runs ✅
 - **Files**: `test-utils/ehash-tutorial/Cargo.toml`, `test-utils/ehash-tutorial/src/main.rs`
 
-### 1.2 Implement controlled CLI command system and state machine
-- [ ] Create `src/commands.rs` with `CommandSystem` struct and command whitelist
-- [ ] Add whitelisted CLI commands: `pool_sv2`, `translator_sv2`, `mining_device`, `cdk-cli`, `ps`, `tail`, `curl`
-- [ ] Add tutorial navigation: `help`, `next`, `back`
-- [ ] Implement command validation against predefined templates (no arbitrary execution)
-- [ ] Create `src/state.rs` with basic `TutorialState` enum (Welcome, PoolOperator, ProxyOperator, Pioneer, Complete)
-- [ ] Add `StateTransition` enum with command-triggered transitions
-- [ ] Add tab completion for whitelisted commands and valid arguments only
-- [ ] Add helpful error messages for invalid commands
-- **Goal**: Users type real CLI commands but only from secure whitelist
+### 1.2 Implement controlled CLI command system and state machine ✅
+- [x] Create `src/commands.rs` with `CommandSystem` struct and command whitelist
+- [x] Add whitelisted CLI commands: `pool_sv2`, `translator_sv2`, `mining_device`, `cdk-cli`, `ps`, `tail`, `curl`
+- [x] Add tutorial navigation: `help`, `next`, `back`
+- [x] Implement command validation against predefined templates (no arbitrary execution)
+- [x] Create `src/state.rs` with basic `TutorialState` enum (Welcome, PoolOperator, ProxyOperator, Pioneer, Complete)
+- [x] Add `StateTransition` enum with command-triggered transitions
+- [x] Add tab completion for whitelisted commands and valid arguments only
+- [x] Add helpful error messages for invalid commands
+- **Goal**: Users type real CLI commands but only from secure whitelist ✅
 - **Files**: `src/commands.rs`, `src/state.rs`, update `src/main.rs`
 
-### 1.3 Create basic UI layout with command input
-- [ ] Create `src/ui.rs` with layout (header, content, command input, footer)
-- [ ] Add chapter title display using basic text (no tui-big-text yet)
-- [ ] Add progress indicator (current chapter/step)
-- [ ] Add command input area at bottom using `tui-input`
-- [ ] Add help text showing available commands for current context
-- **Goal**: Basic UI with interactive command input
-- **Files**: `src/ui.rs`
+### 1.3 Create basic UI layout with command input ✅
+- [x] Create UI layout in `main.rs` with (header, content, command input, footer)
+- [x] Add chapter title display using basic text (no tui-big-text yet)
+- [x] Add progress indicator (current chapter/step)
+- [x] Add command input area at bottom using `tui-input`
+- [x] Add help text showing available commands for current context
+- **Goal**: Basic UI with interactive command input ✅
+- **Files**: `src/main.rs` (integrated directly)
 
-### 1.4 Add minimal chapter content with real CLI prompts
-- [ ] Create `src/chapters.rs` with hardcoded chapter content
-- [ ] Add welcome screen explaining the guided CLI session approach
-- [ ] Add Pool Operator chapter prompting `pool_sv2 --config pool-config-ehash.toml`
-- [ ] Add Proxy Operator chapter prompting `cdk-cli wallet create` and `translator_sv2 --config tproxy-config-ehash.toml`
-- [ ] Add Pioneer chapter prompting `cdk-cli wallet create`, `mining_device --pool-address ... --user-identity ...`
-- [ ] Add contextual help showing real CLI commands available in each chapter
-- **Goal**: User learns production CLI commands through guided practice
+### 1.4 Add minimal chapter content with real CLI prompts ✅
+- [x] Create `src/chapters.rs` with hardcoded chapter content
+- [x] Add welcome screen explaining the guided CLI session approach
+- [x] Add Pool Operator chapter prompting `pool_sv2 --config pool-config-ehash.toml`
+- [x] Add Proxy Operator chapter prompting `cdk-cli wallet create` and `translator_sv2 --config tproxy-config-ehash.toml`
+- [x] Add Pioneer chapter prompting `cdk-cli wallet create`, `mining_device --pool-address ... --user-identity ...`
+- [x] Add contextual help showing real CLI commands available in each chapter
+- **Goal**: User learns production CLI commands through guided practice ✅
 - **Files**: `src/chapters.rs`
 
-### 1.5 Test controlled command flow and security
-- [ ] Run tutorial and test whitelisted command input with tab completion
-- [ ] Test invalid commands show helpful error messages (no execution)
-- [ ] Test `help` command shows available commands for current context
-- [ ] Test `next` and `back` commands for navigation
-- [ ] Test tab completion only suggests valid options
-- [ ] Test command history with up/down arrows
-- [ ] Verify no arbitrary command execution is possible
-- **Goal**: Secure, controlled CLI experience works end-to-end
-- **Files**: Manual testing, fix issues in existing files
+### 1.5 Test controlled command flow and security ✅
+- [x] Run tutorial and test whitelisted command input with tab completion
+- [x] Test invalid commands show helpful error messages (no execution)
+- [x] Test `help` command shows available commands for current context
+- [x] Test `next` and `back` commands for navigation
+- [x] Test tab completion only suggests valid options
+- [x] Test command history with up/down arrows
+- [x] Verify no arbitrary command execution is possible
+- **Goal**: Secure, controlled CLI experience works end-to-end ✅
+- **Files**: 11 passing unit tests, `TESTING.md` manual test guide
 
 ## Phase 2: Add ehashimint Integration
 

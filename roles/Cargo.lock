@@ -980,7 +980,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "bitcoin",
  "cdk",
  "futures",
  "moka",
