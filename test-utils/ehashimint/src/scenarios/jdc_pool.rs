@@ -118,9 +118,9 @@ pub async fn run(
     }
     info!("");
 
-    if let Some(ehash) = &pool_config.ehash {
+    if let Some(ehash_mint) = &pool_config.ehash_mint {
         info!("eHash Mint (Pool):");
-        info!("  • URL: {}", ehash.mint_url);
+        info!("  • URL: {}", ehash_mint.mint_url);
         info!("  • Database: {}", ctx.db_dir.join("ehash_mint.db").display());
         info!("");
     }

@@ -10,17 +10,25 @@ pub mod defaults {
     /// Default Pool configuration for eHash minting
     pub fn pool_config(mint_enabled: bool) -> PoolConfig {
         PoolConfig {
+            authority_public_key: "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72".to_string(),
+            authority_secret_key: "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n".to_string(),
+            cert_validity_sec: 3600,
             listen_address: "127.0.0.1:34254".to_string(),
+            coinbase_reward_script: "76a914dc67b90aa0d3e76a7f69c2d5a1eb4ba0e52f474f88ac".to_string(),
+            server_id: 0,
+            pool_signature: "Tutorial Pool".to_string(),
             tp_address: Some("127.0.0.1:8442".to_string()),
-            ehash: Some(EHashConfig {
-                enabled: mint_enabled,
-                mint_url: "http://127.0.0.1:3338".to_string(),
-                min_leading_zeros: 32,
-                conversion_rate: 1000000,
-                default_locking_pubkey: Some(
-                    "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw".to_string(),
-                ),
-            }),
+            shares_per_minute: 60.0,
+            share_batch_size: 10,
+            ehash_mint: if mint_enabled {
+                Some(EHashMintConfig {
+                    mint_url: "http://127.0.0.1:3338".to_string(),
+                    database_url: None,
+                    min_leading_zeros: 32,
+                })
+            } else {
+                None
+            },
         }
     }
 
@@ -47,14 +55,10 @@ pub mod defaults {
             jds_address: "127.0.0.1:34264".to_string(),
             upstream_address: Some("127.0.0.1:34254".to_string()),
             upstream_port: Some(34254),
-            ehash: Some(EHashConfig {
-                enabled: true,
+            ehash_mint: Some(EHashMintConfig {
                 mint_url: "http://127.0.0.1:3339".to_string(),
+                database_url: None,
                 min_leading_zeros: 32,
-                conversion_rate: 1000000,
-                default_locking_pubkey: Some(
-                    "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw".to_string(),
-                ),
             }),
         }
     }
@@ -67,15 +71,7 @@ pub mod defaults {
             jds_address: "127.0.0.1:34264".to_string(),
             upstream_address: Some("127.0.0.1:34254".to_string()),
             upstream_port: Some(34254),
-            ehash: Some(EHashConfig {
-                enabled: false, // Wallet mode - no minting
-                mint_url: "http://127.0.0.1:3338".to_string(),
-                min_leading_zeros: 32,
-                conversion_rate: 1000000,
-                default_locking_pubkey: Some(
-                    "hpub1qyq2fw8qdwmhzgfzecvl5a3jyy8v8lf7wj8rfxp8sxvh7vxqzqfxl6yw".to_string(),
-                ),
-            }),
+            ehash_mint: None, // Wallet mode - no minting
         }
     }
 

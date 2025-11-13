@@ -139,9 +139,9 @@ pub async fn run(
     }
     info!("");
 
-    if let Some(ehash) = &jdc_config.ehash {
+    if let Some(ehash_mint) = &jdc_config.ehash_mint {
         info!("eHash Mint (JDC):");
-        info!("  • URL: {}", ehash.mint_url);
+        info!("  • URL: {}", ehash_mint.mint_url);
         info!("  • Database: {}", ctx.db_dir.join("jdc_ehash_mint.db").display());
         info!("");
     }

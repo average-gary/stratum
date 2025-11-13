@@ -8,6 +8,7 @@ use crate::state::TutorialState;
 /// Get the content lines for a specific chapter
 pub fn get_chapter_content(state: &TutorialState) -> Vec<Line<'static>> {
     match state {
+        TutorialState::Setup => setup_content(),
         TutorialState::Welcome => welcome_content(),
         TutorialState::PoolOperator => pool_operator_content(),
         TutorialState::ProxyOperator => proxy_operator_content(),
@@ -16,8 +17,120 @@ pub fn get_chapter_content(state: &TutorialState) -> Vec<Line<'static>> {
     }
 }
 
+fn setup_content() -> Vec<Line<'static>> {
+    use ehashimint::find_binary;
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Setup: Building Required Binaries",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Before we begin the eHash tutorial, we need to build the Stratum v2"),
+        Line::from("binaries. This tutorial will guide you through building them step-by-step."),
+        Line::from(""),
+    ];
+
+    // Check current binary status
+    let pool_built = find_binary("pool_sv2").is_ok();
+    let tproxy_built = find_binary("translator_sv2").is_ok();
+    let miner_built = find_binary("mining_device").is_ok();
+
+    lines.push(Line::from(Span::styled(
+        "Binary Status:",
+        Style::default().fg(Color::Yellow),
+    )));
+
+    lines.push(Line::from(Span::styled(
+        format!("  {} pool_sv2", if pool_built { "✓" } else { "○" }),
+        if pool_built { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {} translator_sv2", if tproxy_built { "✓" } else { "○" }),
+        if tproxy_built { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {} mining_device", if miner_built { "✓" } else { "○" }),
+        if miner_built { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+    )));
+    lines.push(Line::from(""));
+
+    if !pool_built || !tproxy_built || !miner_built {
+        lines.extend(vec![
+            Line::from(Span::styled(
+                "Step 1: Initialize Submodules",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("First, initialize the git submodules (cdk, etc.):"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  git submodule update --init --recursive",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from("  (Downloads dependencies like cdk)"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Step 2: Build Binaries",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Then build the required binaries:"),
+            Line::from(""),
+        ]);
+
+        if !pool_built || !tproxy_built {
+            lines.push(Line::from(Span::styled(
+                "  cargo build -p pool_sv2 -p translator_sv2",
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from("  (Builds the Pool and Translation Proxy)"));
+            lines.push(Line::from(""));
+        }
+
+        if !miner_built {
+            lines.push(Line::from(Span::styled(
+                "  cargo build -p mining_device",
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from("  (Builds the CPU miner)"));
+            lines.push(Line::from(""));
+        }
+
+        lines.extend(vec![
+            Line::from("This will take a few minutes. The tutorial will show build progress."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Or build outside the tutorial (recommended for first time):",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from("  1. Press Ctrl+C to exit this tutorial"),
+            Line::from("  2. Run: cd ~/code/ehash && just setup"),
+            Line::from("  3. Wait for build to complete (~5-15 minutes)"),
+            Line::from("  4. Run: just tutorial"),
+            Line::from(""),
+        ]);
+    } else {
+        lines.extend(vec![
+            Line::from(Span::styled(
+                "✓ All binaries are built!",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("You're ready to continue. Type 'next' to proceed!"),
+        ]);
+    }
+
+    lines
+}
+
 fn welcome_content() -> Vec<Line<'static>> {
-    vec![
+    use ehashimint::find_binary;
+
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             "Welcome to the eHash Tutorial!",
@@ -26,9 +139,81 @@ fn welcome_content() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("This interactive tutorial will guide you through setting up and using"),
+        Line::from("This interactive tutorial guides you through setting up and using"),
         Line::from("the eHash protocol with Stratum v2 mining."),
         Line::from(""),
+        Line::from(Span::styled(
+            "First time here?",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("If this is your first time, you may need to build the required binaries."),
+        Line::from("The Setup chapter (previous screen) will guide you through this."),
+        Line::from(""),
+        Line::from("Or run this outside the tutorial:"),
+        Line::from(Span::styled(
+            "  cd ~/code/ehash && just setup",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+    ];
+
+    // Check for required binaries
+    let mut missing = Vec::new();
+    if find_binary("pool_sv2").is_err() {
+        missing.push("pool_sv2");
+    }
+    if find_binary("translator_sv2").is_err() {
+        missing.push("translator_sv2");
+    }
+    if find_binary("mining_device").is_err() {
+        missing.push("mining_device");
+    }
+
+    if !missing.is_empty() {
+        lines.extend(vec![
+            Line::from(Span::styled(
+                "⚠️  SETUP REQUIRED",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Missing binaries (need to build first):"),
+        ]);
+        for binary in &missing {
+            lines.push(Line::from(Span::styled(
+                format!("  ✗ {}", binary),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        lines.extend(vec![
+            Line::from(""),
+            Line::from("To build them:"),
+            Line::from(Span::styled(
+                "  cd ../../roles  # Navigate to stratum/roles",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(Span::styled(
+                "  cargo build -p pool_sv2 -p translator_sv2",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(Span::styled(
+                "  cd test-utils/mining-device && cargo build",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from("Then restart this tutorial!"),
+            Line::from(""),
+        ]);
+    } else {
+        lines.extend(vec![
+            Line::from(Span::styled(
+                "✓ All required binaries found!",
+                Style::default().fg(Color::Green),
+            )),
+            Line::from(""),
+        ]);
+    }
+
+    lines.extend(vec![
         Line::from(Span::styled(
             "What you'll learn:",
             Style::default().fg(Color::Yellow),
@@ -66,7 +251,9 @@ fn welcome_content() -> Vec<Line<'static>> {
             Style::default().fg(Color::Green),
         )),
         Line::from("Type 'next' to start, or 'help' to see available commands."),
-    ]
+    ]);
+
+    lines
 }
 
 fn pool_operator_content() -> Vec<Line<'static>> {

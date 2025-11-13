@@ -1,6 +1,6 @@
 [submodule "deps/cdk"]
 	path = deps/cdk
-	url = https://github.com/cashubtc/cdk.git
+	url = https://github.com/average-gary/cdk.git
 	branch = ehash-v0.13.x
 [submodule "deps/hashpool"]
 	path = deps/hashpool

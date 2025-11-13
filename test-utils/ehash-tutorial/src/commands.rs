@@ -159,6 +159,26 @@ impl CommandSystem {
             "Query mint quotes for a pubkey",
         ).with_placeholder("pubkey", vec!["<hpub>".to_string()]));
 
+        // Build commands
+        system.add_command(CommandTemplate::new(
+            "cargo",
+            "cargo build -p pool_sv2 -p translator_sv2",
+            "Build pool and translator binaries",
+        ));
+
+        system.add_command(CommandTemplate::new(
+            "cargo",
+            "cargo build -p mining_device",
+            "Build mining device binary",
+        ));
+
+        // Git submodule commands
+        system.add_command(CommandTemplate::new(
+            "git",
+            "git submodule update --init --recursive",
+            "Initialize and update git submodules",
+        ));
+
         system
     }
 
@@ -213,8 +233,17 @@ impl CommandSystem {
         let mut commands = Vec::new();
 
         match context {
-            "Welcome" => {
+            "Setup" => {
+                commands.push("Setup Commands:".to_string());
+                commands.push("  git submodule update --init --recursive".to_string());
+                commands.push("".to_string());
+                commands.push("Build Commands:".to_string());
+                commands.push("  cargo build -p pool_sv2 -p translator_sv2".to_string());
+                commands.push("  cargo build -p mining_device".to_string());
                 commands.push("Navigation: help, next".to_string());
+            }
+            "Welcome" => {
+                commands.push("Navigation: help, next, back".to_string());
             }
             "PoolOperator" => {
                 commands.push("Pool Commands:".to_string());

@@ -12,3 +12,8 @@ tokio = { version = "1.40", features = ["full"] }
 anyhow = "1.0"
 tui-input = "0.11"
 clap = { version = "4.5", features = ["derive"] }
+ehashimint = { path = "../ehashimint" }
+nix = { version = "0.29", features = ["signal"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+arboard = "3.4"

@@ -3,6 +3,8 @@ use anyhow::{anyhow, Result};
 /// The current state/chapter of the tutorial
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TutorialState {
+    /// Setup - building required binaries
+    Setup,
     /// Welcome screen - introduction to eHash
     Welcome,
     /// Pool Operator chapter - setting up the Pool with eHash minting
@@ -19,6 +21,7 @@ impl TutorialState {
     /// Get the display name for this state
     pub fn display_name(&self) -> &str {
         match self {
+            TutorialState::Setup => "Setup",
             TutorialState::Welcome => "Welcome",
             TutorialState::PoolOperator => "Pool Operator",
             TutorialState::ProxyOperator => "Proxy Operator",
@@ -30,6 +33,7 @@ impl TutorialState {
     /// Get a brief description of this chapter
     pub fn description(&self) -> &str {
         match self {
+            TutorialState::Setup => "Build required binaries",
             TutorialState::Welcome => "Learn about eHash and the tutorial structure",
             TutorialState::PoolOperator => "Set up a mining pool with eHash minting",
             TutorialState::ProxyOperator => "Configure a translation proxy with eHash support",
@@ -41,6 +45,7 @@ impl TutorialState {
     /// Get the next state
     pub fn next(&self) -> Option<TutorialState> {
         match self {
+            TutorialState::Setup => Some(TutorialState::Welcome),
             TutorialState::Welcome => Some(TutorialState::PoolOperator),
             TutorialState::PoolOperator => Some(TutorialState::ProxyOperator),
             TutorialState::ProxyOperator => Some(TutorialState::Pioneer),
@@ -52,7 +57,8 @@ impl TutorialState {
     /// Get the previous state
     pub fn previous(&self) -> Option<TutorialState> {
         match self {
-            TutorialState::Welcome => None,
+            TutorialState::Setup => None,
+            TutorialState::Welcome => Some(TutorialState::Setup),
             TutorialState::PoolOperator => Some(TutorialState::Welcome),
             TutorialState::ProxyOperator => Some(TutorialState::PoolOperator),
             TutorialState::Pioneer => Some(TutorialState::ProxyOperator),
@@ -63,23 +69,24 @@ impl TutorialState {
     /// Get the chapter number (1-based)
     pub fn chapter_number(&self) -> usize {
         match self {
-            TutorialState::Welcome => 0,
-            TutorialState::PoolOperator => 1,
-            TutorialState::ProxyOperator => 2,
-            TutorialState::Pioneer => 3,
-            TutorialState::Complete => 4,
+            TutorialState::Setup => 0,
+            TutorialState::Welcome => 1,
+            TutorialState::PoolOperator => 2,
+            TutorialState::ProxyOperator => 3,
+            TutorialState::Pioneer => 4,
+            TutorialState::Complete => 5,
         }
     }
 
     /// Get total number of chapters
     pub fn total_chapters() -> usize {
-        4
+        5
     }
 }
 
 impl Default for TutorialState {
     fn default() -> Self {
-        TutorialState::Welcome
+        TutorialState::Setup
     }
 }
 
