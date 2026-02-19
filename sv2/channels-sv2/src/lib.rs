@@ -18,7 +18,7 @@
 /// Maximum length for extranonce prefixes in bytes
 const MAX_EXTRANONCE_PREFIX_LEN: usize = 32;
 
-#[cfg(not(feature = "no_std"))]
+#[cfg(all(not(feature = "no_std"), feature = "mining"))]
 pub mod server;
 
 #[cfg(not(feature = "no_std"))]
@@ -26,6 +26,7 @@ pub mod outputs;
 
 pub mod bip141;
 pub mod chain_tip;
+#[cfg(feature = "mining")]
 pub mod client;
 pub mod merkle_root;
 pub mod target;
