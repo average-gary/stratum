@@ -18,18 +18,35 @@ codec_sv2 = { path = "../sv2/codec-sv2", version = "^5.0.0", features = ["noise_
 extensions_sv2 = { path = "../sv2/extensions-sv2", version = "^0.1.0" }
 framing_sv2 = { path = "../sv2/framing-sv2", version = "^6.0.0" }
 noise_sv2 = { path = "../sv2/noise-sv2", version = "^1.0.0" }
-parsers_sv2 = { path = "../sv2/parsers-sv2", version = "^0.2.0" }
-handlers_sv2 = { path = "../sv2/handlers-sv2", version = "^0.2.0" }
-channels_sv2 = { path = "../sv2/channels-sv2", version = "^4.0.0" }
+parsers_sv2 = { path = "../sv2/parsers-sv2", version = "^0.2.0", default-features = false }
+handlers_sv2 = { path = "../sv2/handlers-sv2", version = "^0.2.0", default-features = false }
+channels_sv2 = { path = "../sv2/channels-sv2", version = "^4.0.0", default-features = false }
 common_messages_sv2 = { path = "../sv2/subprotocols/common-messages", version = "^7.0.0" }
-mining_sv2 = { path = "../sv2/subprotocols/mining", version = "^7.0.0" }
-template_distribution_sv2 = { path = "../sv2/subprotocols/template-distribution", version = "^5.0.0" }
-job_declaration_sv2 = { path = "../sv2/subprotocols/job-declaration", version = "^6.0.0" }
+mining_sv2 = { path = "../sv2/subprotocols/mining", version = "^7.0.0", optional = true }
+template_distribution_sv2 = { path = "../sv2/subprotocols/template-distribution", version = "^5.0.0", optional = true }
+job_declaration_sv2 = { path = "../sv2/subprotocols/job-declaration", version = "^6.0.0", optional = true }
 sv1_api = { path = "../sv1", version = "^2.1.0", optional = true }
 stratum_translation = { path = "stratum-translation", version = "^0.1.0", optional = true }
 bitcoin = { workspace = true }
 
 [features]
+default = ["mining", "job_declaration", "template_distribution"]
+mining = [
+    "dep:mining_sv2",
+    "parsers_sv2/mining",
+    "handlers_sv2/mining",
+    "channels_sv2/mining",
+]
+job_declaration = [
+    "dep:job_declaration_sv2",
+    "parsers_sv2/job_declaration",
+    "handlers_sv2/job_declaration",
+]
+template_distribution = [
+    "dep:template_distribution_sv2",
+    "parsers_sv2/template_distribution",
+    "handlers_sv2/template_distribution",
+]
 with_buffer_pool = [
     "binary_sv2/with_buffer_pool",
     "framing_sv2/with_buffer_pool", 

@@ -18,7 +18,9 @@ pub use common_messages_sv2;
 pub use extensions_sv2;
 pub use framing_sv2;
 pub use handlers_sv2;
+#[cfg(feature = "job_declaration")]
 pub use job_declaration_sv2;
+#[cfg(feature = "mining")]
 pub use mining_sv2;
 pub use noise_sv2;
 pub use parsers_sv2;
@@ -26,4 +28,5 @@ pub use parsers_sv2;
 pub use stratum_translation;
 #[cfg(feature = "sv1")]
 pub use sv1_api;
+#[cfg(feature = "template_distribution")]
 pub use template_distribution_sv2;

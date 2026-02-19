@@ -45,8 +45,16 @@ use core::{
 pub use error::ParserError;
 use extensions_sv2::*;
 use framing_sv2::{framing::Sv2Frame, header::Header};
+
+// CHANNEL_BIT_RECONNECT is defined in mining_sv2 but Reconnect is a Common Message.
+// Provide a fallback when the mining feature is not enabled.
+#[cfg(not(feature = "mining"))]
+const CHANNEL_BIT_RECONNECT: bool = false;
+#[cfg(feature = "job_declaration")]
 use job_declaration_sv2::*;
+#[cfg(feature = "mining")]
 use mining_sv2::*;
+#[cfg(feature = "template_distribution")]
 use template_distribution_sv2::*;
 
 use common_messages_sv2::{
@@ -54,11 +62,13 @@ use common_messages_sv2::{
     SetupConnectionSuccess,
 };
 use extensions_sv2::{RequestExtensions, RequestExtensionsError, RequestExtensionsSuccess};
+#[cfg(feature = "job_declaration")]
 use job_declaration_sv2::{
     AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob, DeclareMiningJobError,
     DeclareMiningJobSuccess, ProvideMissingTransactions, ProvideMissingTransactionsSuccess,
     PushSolution,
 };
+#[cfg(feature = "mining")]
 use mining_sv2::{
     CloseChannel, NewExtendedMiningJob, NewMiningJob, OpenExtendedMiningChannel,
     OpenExtendedMiningChannelSuccess, OpenMiningChannelError, OpenStandardMiningChannel,
@@ -67,6 +77,7 @@ use mining_sv2::{
     SetNewPrevHash as MiningSetNewPrevHash, SetTarget, SubmitSharesError, SubmitSharesExtended,
     SubmitSharesStandard, SubmitSharesSuccess, UpdateChannel, UpdateChannelError,
 };
+#[cfg(feature = "template_distribution")]
 use template_distribution_sv2::{
     CoinbaseOutputConstraints, NewTemplate, RequestTransactionData, RequestTransactionDataError,
     RequestTransactionDataSuccess, SetNewPrevHash, SubmitSolution,
@@ -82,46 +93,83 @@ pub fn message_type_to_name(msg_type: u8) -> &'static str {
         0x03 => "ChannelEndpointChanged",
 
         // Mining messages (0x10-0x2F)
+        #[cfg(feature = "mining")]
         0x10 => "OpenStandardMiningChannel",
+        #[cfg(feature = "mining")]
         0x11 => "OpenStandardMiningChannelSuccess",
+        #[cfg(feature = "mining")]
         0x12 => "OpenMiningChannelError",
+        #[cfg(feature = "mining")]
         0x13 => "OpenExtendedMiningChannel",
+        #[cfg(feature = "mining")]
         0x14 => "OpenExtendedMiningChannelSuccess",
+        #[cfg(feature = "mining")]
         0x15 => "NewMiningJob",
+        #[cfg(feature = "mining")]
         0x16 => "UpdateChannel",
+        #[cfg(feature = "mining")]
         0x17 => "UpdateChannelError",
+        #[cfg(feature = "mining")]
         0x18 => "CloseChannel",
+        #[cfg(feature = "mining")]
         0x19 => "SetExtranoncePrefix",
+        #[cfg(feature = "mining")]
         0x1a => "SubmitSharesStandard",
+        #[cfg(feature = "mining")]
         0x1b => "SubmitSharesExtended",
+        #[cfg(feature = "mining")]
         0x1c => "SubmitSharesSuccess",
+        #[cfg(feature = "mining")]
         0x1d => "SubmitSharesError",
+        #[cfg(feature = "mining")]
         0x1f => "NewExtendedMiningJob",
+        #[cfg(feature = "mining")]
         0x20 => "SetNewPrevHash",
+        #[cfg(feature = "mining")]
         0x21 => "SetTarget",
+        #[cfg(feature = "mining")]
         0x22 => "SetCustomMiningJob",
+        #[cfg(feature = "mining")]
         0x23 => "SetCustomMiningJobSuccess",
+        #[cfg(feature = "mining")]
         0x24 => "SetCustomMiningJobError",
+        #[cfg(feature = "mining")]
         0x25 => "Reconnect", // todo: fix this like listed on `const_sv2`
+        #[cfg(feature = "mining")]
         0x26 => "SetGroupChannel",
 
         // Job Declaration messages (0x50-0x6F)
+        #[cfg(feature = "job_declaration")]
         0x50 => "AllocateMiningJobToken",
+        #[cfg(feature = "job_declaration")]
         0x51 => "AllocateMiningJobTokenSuccess",
+        #[cfg(feature = "job_declaration")]
         0x55 => "ProvideMissingTransactions",
+        #[cfg(feature = "job_declaration")]
         0x56 => "ProvideMissingTransactionsSuccess",
+        #[cfg(feature = "job_declaration")]
         0x57 => "DeclareMiningJob",
+        #[cfg(feature = "job_declaration")]
         0x58 => "DeclareMiningJobSuccess",
+        #[cfg(feature = "job_declaration")]
         0x59 => "DeclareMiningJobError",
+        #[cfg(feature = "job_declaration")]
         0x60 => "PushSolution",
 
         // Template Distribution messages (0x70-0x7F)
+        #[cfg(feature = "template_distribution")]
         0x70 => "CoinbaseOutputDataSize",
+        #[cfg(feature = "template_distribution")]
         0x71 => "NewTemplate",
+        #[cfg(feature = "template_distribution")]
         0x72 => "SetNewPrevHash",
+        #[cfg(feature = "template_distribution")]
         0x73 => "RequestTransactionData",
+        #[cfg(feature = "template_distribution")]
         0x74 => "RequestTransactionDataSuccess",
+        #[cfg(feature = "template_distribution")]
         0x75 => "RequestTransactionDataError",
+        #[cfg(feature = "template_distribution")]
         0x76 => "SubmitSolution",
 
         // Unknown message type
@@ -162,6 +210,7 @@ impl fmt::Display for CommonMessages<'_> {
 }
 
 /// A parser of messages of Template Distribution subprotocol, to be used for parsing raw messages
+#[cfg(feature = "template_distribution")]
 #[derive(Clone, Debug)]
 pub enum TemplateDistribution<'a> {
     CoinbaseOutputConstraints(CoinbaseOutputConstraints),
@@ -173,6 +222,7 @@ pub enum TemplateDistribution<'a> {
     SubmitSolution(SubmitSolution<'a>),
 }
 
+#[cfg(feature = "template_distribution")]
 impl fmt::Display for TemplateDistribution<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -196,6 +246,7 @@ impl fmt::Display for TemplateDistribution<'_> {
 }
 
 /// A parser of messages of Job Declaration subprotocol, to be used for parsing raw messages
+#[cfg(feature = "job_declaration")]
 #[derive(Clone, Debug)]
 pub enum JobDeclaration<'a> {
     AllocateMiningJobToken(AllocateMiningJobToken<'a>),
@@ -208,6 +259,7 @@ pub enum JobDeclaration<'a> {
     PushSolution(PushSolution<'a>),
 }
 
+#[cfg(feature = "job_declaration")]
 impl fmt::Display for JobDeclaration<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -254,6 +306,7 @@ impl fmt::Display for JobDeclaration<'_> {
 ///   - Acts as a bridge between parsed subprotocol messages and role-specific logic, providing a
 ///     unified interface for handling mining-related communication. This reduces complexity and
 ///     ensures consistency across roles.
+#[cfg(feature = "mining")]
 #[derive(Clone, Debug)]
 pub enum Mining<'a> {
     CloseChannel(CloseChannel<'a>),
@@ -279,6 +332,7 @@ pub enum Mining<'a> {
     UpdateChannelError(UpdateChannelError<'a>),
 }
 
+#[cfg(feature = "mining")]
 impl fmt::Display for Mining<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -307,6 +361,7 @@ impl fmt::Display for Mining<'_> {
     }
 }
 
+#[cfg(feature = "mining")]
 impl Mining<'_> {
     /// converter into static lifetime
     pub fn into_static(self) -> Mining<'static> {
@@ -361,6 +416,7 @@ impl CommonMessages<'_> {
     }
 }
 
+#[cfg(feature = "template_distribution")]
 impl TemplateDistribution<'_> {
     /// converter into static lifetime
     pub fn into_static(self) -> TemplateDistribution<'static> {
@@ -390,6 +446,7 @@ impl TemplateDistribution<'_> {
     }
 }
 
+#[cfg(feature = "job_declaration")]
 impl JobDeclaration<'_> {
     /// converter into static lifetime
     pub fn into_static(self) -> JobDeclaration<'static> {
@@ -500,8 +557,11 @@ impl AnyMessage<'_> {
     pub fn into_static(self) -> AnyMessage<'static> {
         match self {
             AnyMessage::Common(m) => AnyMessage::Common(m.into_static()),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(m) => AnyMessage::Mining(m.into_static()),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(m) => AnyMessage::JobDeclaration(m.into_static()),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(m) => {
                 AnyMessage::TemplateDistribution(m.into_static())
             }
@@ -571,6 +631,7 @@ impl IsSv2Message for CommonMessages<'_> {
     }
 }
 
+#[cfg(feature = "template_distribution")]
 impl IsSv2Message for TemplateDistribution<'_> {
     fn message_type(&self) -> u8 {
         match self {
@@ -599,6 +660,7 @@ impl IsSv2Message for TemplateDistribution<'_> {
         0 // Template Distribution messages are not extensions
     }
 }
+#[cfg(feature = "job_declaration")]
 impl IsSv2Message for JobDeclaration<'_> {
     fn message_type(&self) -> u8 {
         match self {
@@ -635,6 +697,7 @@ impl IsSv2Message for JobDeclaration<'_> {
         0 // Job Declaration messages are not extensions
     }
 }
+#[cfg(feature = "mining")]
 impl IsSv2Message for Mining<'_> {
     fn message_type(&self) -> u8 {
         match self {
@@ -748,6 +811,7 @@ impl<'decoder> From<CommonMessages<'decoder>> for EncodableField<'decoder> {
         }
     }
 }
+#[cfg(feature = "template_distribution")]
 impl<'decoder> From<TemplateDistribution<'decoder>> for EncodableField<'decoder> {
     fn from(m: TemplateDistribution<'decoder>) -> Self {
         match m {
@@ -761,6 +825,7 @@ impl<'decoder> From<TemplateDistribution<'decoder>> for EncodableField<'decoder>
         }
     }
 }
+#[cfg(feature = "job_declaration")]
 impl<'decoder> From<JobDeclaration<'decoder>> for EncodableField<'decoder> {
     fn from(m: JobDeclaration<'decoder>) -> Self {
         match m {
@@ -776,6 +841,7 @@ impl<'decoder> From<JobDeclaration<'decoder>> for EncodableField<'decoder> {
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'decoder> From<Mining<'decoder>> for EncodableField<'decoder> {
     fn from(m: Mining<'decoder>) -> Self {
         match m {
@@ -815,6 +881,7 @@ impl GetSize for CommonMessages<'_> {
         }
     }
 }
+#[cfg(feature = "template_distribution")]
 impl GetSize for TemplateDistribution<'_> {
     fn get_size(&self) -> usize {
         match self {
@@ -828,6 +895,7 @@ impl GetSize for TemplateDistribution<'_> {
         }
     }
 }
+#[cfg(feature = "job_declaration")]
 impl GetSize for JobDeclaration<'_> {
     fn get_size(&self) -> usize {
         match self {
@@ -842,6 +910,7 @@ impl GetSize for JobDeclaration<'_> {
         }
     }
 }
+#[cfg(feature = "mining")]
 impl GetSize for Mining<'_> {
     fn get_size(&self) -> usize {
         match self {
@@ -904,6 +973,7 @@ impl<'decoder> Deserialize<'decoder> for CommonMessages<'decoder> {
         unimplemented!()
     }
 }
+#[cfg(feature = "template_distribution")]
 impl<'decoder> Deserialize<'decoder> for TemplateDistribution<'decoder> {
     fn get_structure(_v: &[u8]) -> core::result::Result<Vec<FieldMarker>, binary_sv2::Error> {
         unimplemented!()
@@ -914,6 +984,7 @@ impl<'decoder> Deserialize<'decoder> for TemplateDistribution<'decoder> {
         unimplemented!()
     }
 }
+#[cfg(feature = "job_declaration")]
 impl<'decoder> Deserialize<'decoder> for JobDeclaration<'decoder> {
     fn get_structure(_v: &[u8]) -> core::result::Result<Vec<FieldMarker>, binary_sv2::Error> {
         unimplemented!()
@@ -924,6 +995,7 @@ impl<'decoder> Deserialize<'decoder> for JobDeclaration<'decoder> {
         unimplemented!()
     }
 }
+#[cfg(feature = "mining")]
 impl<'decoder> Deserialize<'decoder> for Mining<'decoder> {
     fn get_structure(_v: &[u8]) -> core::result::Result<Vec<FieldMarker>, binary_sv2::Error> {
         unimplemented!()
@@ -957,6 +1029,7 @@ impl<'decoder> Deserialize<'decoder> for AnyMessage<'decoder> {
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'decoder> Deserialize<'decoder> for MiningDeviceMessages<'decoder> {
     fn get_structure(_v: &[u8]) -> core::result::Result<Vec<FieldMarker>, binary_sv2::Error> {
         unimplemented!()
@@ -1026,6 +1099,7 @@ impl<'a> TryFrom<(u8, &'a mut [u8])> for CommonMessages<'a> {
 }
 
 /// A list of 8-bit message type variants under Template Distribution subprotocol
+#[cfg(feature = "template_distribution")]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 #[allow(clippy::enum_variant_names)]
@@ -1039,6 +1113,7 @@ pub enum TemplateDistributionTypes {
     SubmitSolution = MESSAGE_TYPE_SUBMIT_SOLUTION,
 }
 
+#[cfg(feature = "template_distribution")]
 impl TryFrom<u8> for TemplateDistributionTypes {
     type Error = ParserError;
 
@@ -1064,6 +1139,7 @@ impl TryFrom<u8> for TemplateDistributionTypes {
     }
 }
 
+#[cfg(feature = "template_distribution")]
 impl<'a> TryFrom<(u8, &'a mut [u8])> for TemplateDistribution<'a> {
     type Error = ParserError;
 
@@ -1103,6 +1179,7 @@ impl<'a> TryFrom<(u8, &'a mut [u8])> for TemplateDistribution<'a> {
 }
 
 /// A list of 8-bit message type variants under Job Declaration subprotocol
+#[cfg(feature = "job_declaration")]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 #[allow(clippy::enum_variant_names)]
@@ -1117,6 +1194,7 @@ pub enum JobDeclarationTypes {
     PushSolution = MESSAGE_TYPE_PUSH_SOLUTION,
 }
 
+#[cfg(feature = "job_declaration")]
 impl TryFrom<u8> for JobDeclarationTypes {
     type Error = ParserError;
 
@@ -1145,6 +1223,7 @@ impl TryFrom<u8> for JobDeclarationTypes {
     }
 }
 
+#[cfg(feature = "job_declaration")]
 impl<'a> TryFrom<(u8, &'a mut [u8])> for JobDeclaration<'a> {
     type Error = ParserError;
 
@@ -1188,6 +1267,7 @@ impl<'a> TryFrom<(u8, &'a mut [u8])> for JobDeclaration<'a> {
 }
 
 /// A list of 8-bit message type variants under Mining subprotocol
+#[cfg(feature = "mining")]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 #[allow(clippy::enum_variant_names)]
@@ -1215,6 +1295,7 @@ pub enum MiningTypes {
     UpdateChannelError = MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
 }
 
+#[cfg(feature = "mining")]
 impl TryFrom<u8> for MiningTypes {
     type Error = ParserError;
 
@@ -1253,6 +1334,7 @@ impl TryFrom<u8> for MiningTypes {
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'a> TryFrom<(u8, &'a mut [u8])> for Mining<'a> {
     type Error = ParserError;
 
@@ -1418,12 +1500,14 @@ impl<'a> TryFrom<(u16, u8, &'a mut [u8])> for Extensions<'a> {
 }
 
 /// A parser of messages that a Mining Device could send
+#[cfg(feature = "mining")]
 #[derive(Clone, Debug)]
 pub enum MiningDeviceMessages<'a> {
     Common(CommonMessages<'a>),
     Mining(Mining<'a>),
     Extensions(Extensions<'a>),
 }
+#[cfg(feature = "mining")]
 impl<'decoder> From<MiningDeviceMessages<'decoder>> for EncodableField<'decoder> {
     fn from(m: MiningDeviceMessages<'decoder>) -> Self {
         match m {
@@ -1433,6 +1517,7 @@ impl<'decoder> From<MiningDeviceMessages<'decoder>> for EncodableField<'decoder>
         }
     }
 }
+#[cfg(feature = "mining")]
 impl GetSize for MiningDeviceMessages<'_> {
     fn get_size(&self) -> usize {
         match self {
@@ -1442,6 +1527,7 @@ impl GetSize for MiningDeviceMessages<'_> {
         }
     }
 }
+#[cfg(feature = "mining")]
 impl<'a> TryFrom<(u8, &'a mut [u8])> for MiningDeviceMessages<'a> {
     type Error = ParserError;
 
@@ -1462,8 +1548,11 @@ impl<'a> TryFrom<(u8, &'a mut [u8])> for MiningDeviceMessages<'a> {
 #[derive(Clone, Debug)]
 pub enum AnyMessage<'a> {
     Common(CommonMessages<'a>),
+    #[cfg(feature = "mining")]
     Mining(Mining<'a>),
+    #[cfg(feature = "job_declaration")]
     JobDeclaration(JobDeclaration<'a>),
+    #[cfg(feature = "template_distribution")]
     TemplateDistribution(TemplateDistribution<'a>),
     Extensions(Extensions<'a>),
 }
@@ -1472,14 +1561,18 @@ impl fmt::Display for AnyMessage<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AnyMessage::Common(m) => write!(f, "CommonMessage: {m}"),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(m) => write!(f, "MiningMessage: {m}"),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(m) => write!(f, "JobDeclarationMessage: {m}"),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(m) => write!(f, "TemplateDistributionMessage: {m}"),
             AnyMessage::Extensions(m) => write!(f, "ExtensionsMessage: {m}"),
         }
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'a> TryFrom<MiningDeviceMessages<'a>> for AnyMessage<'a> {
     type Error = ParserError;
 
@@ -1496,8 +1589,11 @@ impl<'decoder> From<AnyMessage<'decoder>> for EncodableField<'decoder> {
     fn from(m: AnyMessage<'decoder>) -> Self {
         match m {
             AnyMessage::Common(a) => a.into(),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(a) => a.into(),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(a) => a.into(),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(a) => a.into(),
             AnyMessage::Extensions(a) => a.into(),
         }
@@ -1507,8 +1603,11 @@ impl GetSize for AnyMessage<'_> {
     fn get_size(&self) -> usize {
         match self {
             AnyMessage::Common(a) => a.get_size(),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(a) => a.get_size(),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(a) => a.get_size(),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(a) => a.get_size(),
             AnyMessage::Extensions(a) => a.get_size(),
         }
@@ -1519,8 +1618,11 @@ impl IsSv2Message for AnyMessage<'_> {
     fn message_type(&self) -> u8 {
         match self {
             AnyMessage::Common(a) => a.message_type(),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(a) => a.message_type(),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(a) => a.message_type(),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(a) => a.message_type(),
             AnyMessage::Extensions(a) => a.message_type(),
         }
@@ -1529,8 +1631,11 @@ impl IsSv2Message for AnyMessage<'_> {
     fn channel_bit(&self) -> bool {
         match self {
             AnyMessage::Common(a) => a.channel_bit(),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(a) => a.channel_bit(),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(a) => a.channel_bit(),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(a) => a.channel_bit(),
             AnyMessage::Extensions(a) => a.channel_bit(),
         }
@@ -1539,14 +1644,18 @@ impl IsSv2Message for AnyMessage<'_> {
     fn extension_type(&self) -> u16 {
         match self {
             AnyMessage::Common(a) => a.extension_type(),
+            #[cfg(feature = "mining")]
             AnyMessage::Mining(a) => a.extension_type(),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(a) => a.extension_type(),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(a) => a.extension_type(),
             AnyMessage::Extensions(a) => a.extension_type(),
         }
     }
 }
 
+#[cfg(feature = "mining")]
 impl IsSv2Message for MiningDeviceMessages<'_> {
     fn message_type(&self) -> u8 {
         match self {
@@ -1578,6 +1687,8 @@ impl IsSv2Message for MiningDeviceMessages<'_> {
 /// This implementation handles all message types including Extensions messages which require
 /// both extension_type and message_type to be correctly parsed. Standard protocol messages
 /// (Common, Mining, etc.) have extension_type == 0 and only need the message_type.
+///
+/// Uses sequential try-parse to support conditional compilation of subprotocol features.
 impl<'a> TryFrom<(Header, &'a mut [u8])> for AnyMessage<'a> {
     type Error = ParserError;
 
@@ -1594,35 +1705,32 @@ impl<'a> TryFrom<(Header, &'a mut [u8])> for AnyMessage<'a> {
                 .map(Self::Extensions);
         }
 
-        // Fall back to standard protocol message parsing (extension_type == 0)
-        let is_common: Result<CommonMessageTypes, ParserError> = message_type.try_into();
-        let is_mining: Result<MiningTypes, ParserError> = message_type.try_into();
-        let is_job_declaration: Result<JobDeclarationTypes, ParserError> = message_type.try_into();
-        let is_template_distribution: Result<TemplateDistributionTypes, ParserError> =
-            message_type.try_into();
-
-        match (
-            is_common,
-            is_mining,
-            is_job_declaration,
-            is_template_distribution,
-        ) {
-            (Ok(_), Err(_), Err(_), Err(_)) => {
-                Ok(Self::Common((message_type, payload).try_into()?))
-            }
-            (Err(_), Ok(_), Err(_), Err(_)) => {
-                Ok(Self::Mining((message_type, payload).try_into()?))
-            }
-            (Err(_), Err(_), Ok(_), Err(_)) => {
-                Ok(Self::JobDeclaration((message_type, payload).try_into()?))
-            }
-            (Err(_), Err(_), Err(_), Ok(_)) => Ok(Self::TemplateDistribution(
-                (message_type, payload).try_into()?,
-            )),
-            (Err(e), Err(_), Err(_), Err(_)) => Err(e),
-            // This is an impossible state is safe to panic here
-            _ => panic!(),
+        // Try Common messages first (always available)
+        if CommonMessageTypes::try_from(message_type).is_ok() {
+            return Ok(Self::Common((message_type, payload).try_into()?));
         }
+
+        // Try Mining messages
+        #[cfg(feature = "mining")]
+        if MiningTypes::try_from(message_type).is_ok() {
+            return Ok(Self::Mining((message_type, payload).try_into()?));
+        }
+
+        // Try Job Declaration messages
+        #[cfg(feature = "job_declaration")]
+        if JobDeclarationTypes::try_from(message_type).is_ok() {
+            return Ok(Self::JobDeclaration((message_type, payload).try_into()?));
+        }
+
+        // Try Template Distribution messages
+        #[cfg(feature = "template_distribution")]
+        if TemplateDistributionTypes::try_from(message_type).is_ok() {
+            return Ok(Self::TemplateDistribution(
+                (message_type, payload).try_into()?,
+            ));
+        }
+
+        Err(ParserError::UnexpectedMessage(message_type))
     }
 }
 
@@ -1662,16 +1770,19 @@ impl<'a> From<RequestExtensionsError<'a>> for Extensions<'a> {
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'a> From<OpenStandardMiningChannel<'a>> for Mining<'a> {
     fn from(v: OpenStandardMiningChannel<'a>) -> Self {
         Mining::OpenStandardMiningChannel(v)
     }
 }
+#[cfg(feature = "mining")]
 impl<'a> From<UpdateChannel<'a>> for Mining<'a> {
     fn from(v: UpdateChannel<'a>) -> Self {
         Mining::UpdateChannel(v)
     }
 }
+#[cfg(feature = "mining")]
 impl<'a> From<OpenStandardMiningChannelSuccess<'a>> for Mining<'a> {
     fn from(v: OpenStandardMiningChannelSuccess<'a>) -> Self {
         Mining::OpenStandardMiningChannelSuccess(v)
@@ -1684,6 +1795,7 @@ impl<'a, T: Into<CommonMessages<'a>>> From<T> for AnyMessage<'a> {
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'a, T: Into<CommonMessages<'a>>> From<T> for MiningDeviceMessages<'a> {
     fn from(v: T) -> Self {
         MiningDeviceMessages::Common(v.into())
@@ -1704,6 +1816,7 @@ impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<AnyMessage<'decoder>>
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessages<'decoder>>
     for Sv2Frame<MiningDeviceMessages<'decoder>, B>
 {
@@ -1718,6 +1831,7 @@ impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<MiningDeviceMessages<'decod
     }
 }
 
+#[cfg(feature = "template_distribution")]
 impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<TemplateDistribution<'decoder>>
     for Sv2Frame<TemplateDistribution<'decoder>, B>
 {
@@ -1732,6 +1846,7 @@ impl<'decoder, B: AsMut<[u8]> + AsRef<[u8]>> TryFrom<TemplateDistribution<'decod
     }
 }
 
+#[cfg(feature = "mining")]
 impl<'a> TryFrom<AnyMessage<'a>> for MiningDeviceMessages<'a> {
     type Error = ParserError;
 
@@ -1739,7 +1854,9 @@ impl<'a> TryFrom<AnyMessage<'a>> for MiningDeviceMessages<'a> {
         match value {
             AnyMessage::Common(message) => Ok(Self::Common(message)),
             AnyMessage::Mining(message) => Ok(Self::Mining(message)),
+            #[cfg(feature = "job_declaration")]
             AnyMessage::JobDeclaration(_) => Err(ParserError::UnexpectedPoolMessage),
+            #[cfg(feature = "template_distribution")]
             AnyMessage::TemplateDistribution(_) => Err(ParserError::UnexpectedPoolMessage),
             AnyMessage::Extensions(message) => Ok(Self::Extensions(message)),
         }
@@ -1748,13 +1865,16 @@ impl<'a> TryFrom<AnyMessage<'a>> for MiningDeviceMessages<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::{AnyMessage, Extensions, ExtensionsNegotiation, Mining};
+    #[cfg(feature = "mining")]
+    use crate::Mining;
+    use crate::{AnyMessage, Extensions, ExtensionsNegotiation};
     use alloc::vec;
     use alloc::vec::Vec;
     use binary_sv2::{Seq064K, Sv2Option, U256};
     use codec_sv2::StandardSv2Frame;
     use core::convert::{TryFrom, TryInto};
     use extensions_sv2::{RequestExtensions, EXTENSION_TYPE_EXTENSIONS_NEGOTIATION};
+    #[cfg(feature = "mining")]
     use mining_sv2::NewMiningJob;
 
     pub type Message = AnyMessage<'static>;
@@ -1790,6 +1910,7 @@ mod test {
         );
     }
 
+    #[cfg(feature = "mining")]
     #[test]
     fn new_mining_job_serialization() {
         const CORRECTLY_SERIALIZED_MSG: &[u8] = &[
