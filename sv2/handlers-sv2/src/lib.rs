@@ -1,8 +1,11 @@
 mod common;
 mod error;
 mod extensions;
+#[cfg(feature = "job_declaration")]
 mod job_declaration;
+#[cfg(feature = "mining")]
 mod mining;
+#[cfg(feature = "template_distribution")]
 mod template_distribution;
 
 pub use error::HandlerErrorType;
@@ -12,11 +15,13 @@ pub use common::{
     HandleCommonMessagesFromServerAsync, HandleCommonMessagesFromServerSync,
 };
 
+#[cfg(feature = "mining")]
 pub use mining::{
     HandleMiningMessagesFromClientAsync, HandleMiningMessagesFromClientSync,
     HandleMiningMessagesFromServerAsync, HandleMiningMessagesFromServerSync, SupportedChannelTypes,
 };
 
+#[cfg(feature = "template_distribution")]
 pub use template_distribution::{
     HandleTemplateDistributionMessagesFromClientAsync,
     HandleTemplateDistributionMessagesFromClientSync,
@@ -24,6 +29,7 @@ pub use template_distribution::{
     HandleTemplateDistributionMessagesFromServerSync,
 };
 
+#[cfg(feature = "job_declaration")]
 pub use job_declaration::{
     HandleJobDeclarationMessagesFromClientAsync, HandleJobDeclarationMessagesFromClientSync,
     HandleJobDeclarationMessagesFromServerAsync, HandleJobDeclarationMessagesFromServerSync,
